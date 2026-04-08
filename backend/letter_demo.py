@@ -8,7 +8,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from .crypto import decrypt_secret
-from .gemini import get_quality_letter, validate_letter
+from .letter_generation import get_quality_letter, validate_letter
 from .hh_client import fetch_real_vacancy_for_letter
 from .models import Application, SearchConfig, UserSettings
 from .search_params import search_config_dict_from_row

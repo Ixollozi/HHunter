@@ -33,23 +33,6 @@ export default function Dashboard() {
     refresh()
   }, [])
 
-  useEffect(() => {
-    const periodMs = 120000
-    const tick = () => {
-      if (typeof document !== 'undefined' && document.hidden) return
-      refresh()
-    }
-    const id = setInterval(tick, periodMs)
-    const onVis = () => {
-      if (!document.hidden) refresh()
-    }
-    document.addEventListener('visibilitychange', onVis)
-    return () => {
-      clearInterval(id)
-      document.removeEventListener('visibilitychange', onVis)
-    }
-  }, [])
-
   const s = status?.session
 
   return (

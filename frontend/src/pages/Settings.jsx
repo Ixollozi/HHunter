@@ -162,7 +162,7 @@ export default function Settings() {
       <div>
         <h1 className="text-2xl font-semibold flex items-center gap-2 flex-wrap">
           Настройки
-          <Hint title="Ключ Gemini и резюме для генерации писем через бэкенд (расширение и сервер)." />
+          <Hint title="Ключ Groq и резюме для генерации писем через бэкенд (расширение и сервер)." />
         </h1>
         <p className="text-slate-400 mt-1">
           Поля сохраняются автоматически через ~3 с после изменения (если данные реально поменялись); поиск и лимиты — вкладка «Поиск».
@@ -241,7 +241,7 @@ export default function Settings() {
         <div className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4 space-y-3 transition-shadow hover:shadow-md hover:shadow-black/20">
           <div className="text-sm text-slate-300 flex items-center gap-1 flex-wrap">
             Резюме
-            <Hint title="Текст или PDF — для промпта к Gemini при генерации сопроводительного письма." />
+            <Hint title="Текст или PDF — для промпта к Groq при генерации сопроводительного письма." />
           </div>
           <input
             ref={resumeFileRef}
@@ -287,7 +287,7 @@ export default function Settings() {
           <textarea
             className={`${field} min-h-64 resize-y`}
             placeholder="Вставьте текст резюме или загрузите PDF выше."
-            title="Уходит в промпт к Gemini; не публикуется автоматически на сайтах вакансий."
+            title="Уходит в промпт к Groq; не публикуется автоматически на сайтах вакансий."
             value={form.resume_text}
             onChange={(e) => setForm((p) => ({ ...p, resume_text: e.target.value }))}
           />

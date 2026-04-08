@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "HHunter",
-  "version": "1.0.0",
-  "description": "Отклики на hh.ru: письмо с бэкенда HHunter (Gemini), сохранение в личном кабинете.",
+  "version": "1.1.0",
+  "description": "HHunter: авто-отклик на hh.ru через ваш бэкенд (Groq/Qwen).",
   "permissions": ["storage", "tabs", "scripting", "activeTab"],
   "host_permissions": [
     "https://hh.ru/*",
@@ -12,9 +12,7 @@
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*"
   ],
-  "background": {
-    "service_worker": "background.js"
-  },
+  "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
       "matches": ["https://hh.ru/*", "https://*.hh.ru/*"],

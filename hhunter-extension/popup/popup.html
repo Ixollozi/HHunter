@@ -1,54 +1,37 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HHunter</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="popup.css" />
+    <title>HHunter</title>
   </head>
   <body>
-    <div id="app">
-      <header class="hdr">
-        <span class="logo">HHunter</span>
-        <span id="userChip" class="chip hidden"></span>
-      </header>
+    <div class="wrap">
+      <div class="title">HHunter</div>
+      <p class="hint">Только JWT, без слова Bearer. Или «Токен с сайта».</p>
+      <div class="row">
+        <label>API base</label>
+        <input id="apiBase" placeholder="http://localhost:8000" />
+      </div>
+      <div class="row">
+        <label>JWT token</label>
+        <input id="token" placeholder="eyJ…" />
+      </div>
+      <div class="row">
+        <label></label>
+        <button type="button" id="btnPullToken" class="btn-secondary">Токен с сайта</button>
+      </div>
+      <div class="row buttons">
+        <button id="btnSave">Сохранить</button>
+        <button id="btnToggle">Запустить</button>
+      </div>
 
-      <section id="block-config" class="panel hidden">
-        <label>URL API</label>
-        <input type="text" id="apiBase" />
-        <label>URL сайта HHunter (для токена)</label>
-        <input type="text" id="frontendOrigin" />
-        <button type="button" id="btnSaveConfig" class="btn secondary">Сохранить URL</button>
-      </section>
-
-      <section id="block-guest" class="panel">
-        <p class="muted">Войдите в аккаунт на сайте HHunter, затем нажмите «Прочитать токен».</p>
-        <button type="button" id="btnOpenWeb" class="btn primary">Открыть HHunter</button>
-        <button type="button" id="btnSyncToken" class="btn secondary">Прочитать токен</button>
-        <button type="button" id="btnShowConfig" class="btn link">Настроить URL API…</button>
-      </section>
-
-      <section id="block-wrong-tab" class="panel hidden">
-        <p class="muted">Перейдите на hh.ru — список вакансий или страницу вакансии.</p>
-        <button type="button" id="btnOpenHh" class="btn primary">Открыть hh.ru</button>
-      </section>
-
-      <section id="block-ready" class="panel hidden">
-        <div id="statusLine" class="muted small"></div>
-        <div class="progress-wrap">
-          <div id="progressLabel" class="small muted">Сегодня (UTC): 0 / —</div>
-          <div class="bar"><div id="progressFill" class="fill"></div></div>
-        </div>
-        <button type="button" id="btnStart" class="btn primary wide">Запустить</button>
-        <button type="button" id="btnStop" class="btn danger wide hidden">Остановить</button>
-      </section>
-
-      <section id="block-running" class="panel hidden">
-        <p id="runningLine" class="muted">Обрабатываю вакансии…</p>
-        <button type="button" id="btnStop2" class="btn danger wide">Остановить</button>
-      </section>
-
-      <p id="errLine" class="err hidden"></p>
+      <div class="box">
+        <div id="modelLine" class="muted">—</div>
+        <div id="statsLine" class="muted">—</div>
+        <div id="lastLine" class="muted">—</div>
+      </div>
     </div>
     <script src="popup.js"></script>
   </body>

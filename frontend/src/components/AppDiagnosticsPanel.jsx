@@ -1,5 +1,4 @@
-import { useCallback, useState } from 'react'
-import { api } from '../lib/api'
+import { useCallback, useEffect, useState } from 'react'
 import { apiBaseUrl } from '../lib/api'
 import { getToken } from '../lib/auth'
 import { btnNeutral, btnPrimary } from '../ui/hover'
@@ -20,6 +19,8 @@ const SEARCH_LABELS = {
   daily_limit: 'Лимит в день',
 }
 
+const DIAG_LETTER_KEY = 'hhunter_diag_include_letter'
+
 function formatSearchValue(v) {
   if (v == null || v === '') return '—'
   if (Array.isArray(v)) return v.length ? v.join(', ') : '—'
@@ -35,6 +36,21 @@ export function AppDiagnosticsPanel() {
   const [copied, setCopied] = useState(false)
   const [liveLog, setLiveLog] = useState([])
   const [liveStep, setLiveStep] = useState('')
+  const [includeLetterDemo, setIncludeLetterDemo] = useState(() => {
+    try {
+      return sessionStorage.getItem(DIAG_LETTER_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(DIAG_LETTER_KEY, includeLetterDemo ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }, [includeLetterDemo])
 
   const run = useCallback(async () => {
     setErr('')
@@ -43,7 +59,8 @@ export function AppDiagnosticsPanel() {
     setLiveStep('Запуск…')
     try {
       const token = getToken()
-      const res = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/diagnostics/run-stream`, {
+      const q = includeLetterDemo ? '?include_letter=true' : ''
+      const res = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/diagnostics/run-stream${q}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -105,7 +122,7 @@ export function AppDiagnosticsPanel() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [includeLetterDemo])
 
   function openPanel() {
     setOpen(true)
@@ -144,18 +161,32 @@ export function AppDiagnosticsPanel() {
   return (
     <>
       <div className="fixed bottom-0 inset-x-0 z-40 border-t border-slate-800 bg-slate-950/95 backdrop-blur px-4 py-3 shadow-[0_-8px_30px_rgba(0,0,0,0.35)]">
-        <div className="mx-auto max-w-6xl flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-slate-400 min-w-0">
-            Проверка: настройки, параметры поиска, hh.ru API и письмо (Groq/Qwen) — без отправки отклика.
+        <div className="mx-auto max-w-6xl flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+          <p className="text-sm text-slate-400 min-w-0 sm:max-w-xl">
+            Проверка: настройки, поиск и hh.ru без расхода Groq. Отклик на вакансию не отправляется.
           </p>
-          <button
-            type="button"
-            onClick={openPanel}
-            disabled={loading && open}
-            className={`shrink-0 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60 ${btnPrimary}`}
-          >
-            {loading && open ? 'Проверка…' : 'Протестировать приложение'}
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4 w-full sm:w-auto">
+            <label className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-200 cursor-pointer select-none w-fit max-w-full">
+              <input
+                type="checkbox"
+                checked={includeLetterDemo}
+                onChange={(e) => setIncludeLetterDemo(e.target.checked)}
+                className="h-4 w-4 shrink-0 rounded border-slate-500 bg-slate-950 accent-indigo-500"
+              />
+              <span>
+                Сгенерировать демо-письмо
+                <span className="block text-xs font-normal text-slate-500">+1 запрос к Groq, иначе без модели</span>
+              </span>
+            </label>
+            <button
+              type="button"
+              onClick={openPanel}
+              disabled={loading && open}
+              className={`shrink-0 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60 w-full sm:w-auto ${btnPrimary}`}
+            >
+              {loading && open ? 'Проверка…' : 'Протестировать приложение'}
+            </button>
+          </div>
         </div>
       </div>
 

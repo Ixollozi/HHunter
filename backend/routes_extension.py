@@ -10,7 +10,7 @@ from .config import settings
 from .auth import get_current_user
 from .crypto import decrypt_secret
 from .deps import get_db
-from .gemini import get_quality_letter, vacancy_dict_for_extension
+from .letter_generation import get_quality_letter, vacancy_dict_for_extension
 from .logger import log_app
 from .logger import log_letter_generation
 from .models import Application, SearchConfig, Session as DbSession, User, UserSettings

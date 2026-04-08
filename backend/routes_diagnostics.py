@@ -4,7 +4,7 @@ import datetime as dt
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
@@ -23,7 +23,14 @@ def _ndjson_line(obj: dict[str, Any]) -> bytes:
 
 
 @router.post("/run-stream")
-def run_diagnostics_stream(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> StreamingResponse:
+def run_diagnostics_stream(
+    include_letter: bool = Query(
+        default=False,
+        description="Если true — один запрос к Groq для демо-письма. По умолчанию выкл., чтобы не расходовать квоту.",
+    ),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StreamingResponse:
     """
     Потоковая диагностика (NDJSON): отдаёт шаги проверки в реальном времени.
     Клиент читает построчно и обновляет UI.
@@ -177,8 +184,19 @@ def run_diagnostics_stream(db: Session = Depends(get_db), user: User = Depends(g
             )
             yield emit("check", {"check": checks[-1]})
 
-        # AI letter (optional, can be slow)
-        if s and groq_ok and resume_ok:
+        # AI letter (optional; Groq quota — only when include_letter=true)
+        if not include_letter:
+            checks.append(
+                {
+                    "id": "ai_letter_demo",
+                    "ok": True,
+                    "skipped": True,
+                    "label": "AI: письмо к вакансии с hh.ru",
+                    "detail": "Пропущено: включите «Демо-письмо Groq» в проверке, чтобы сделать один запрос к модели",
+                }
+            )
+            yield emit("check", {"check": checks[-1]})
+        elif s and groq_ok and resume_ok:
             yield emit("step", {"message": "Генерируем письмо через Groq… (это может занять 3–20 сек)"})
             try:
                 letter_demo = build_letter_demo_payload(db, user.id, s)
@@ -245,9 +263,13 @@ def run_diagnostics_stream(db: Session = Depends(get_db), user: User = Depends(g
 
 
 @router.post("/run")
-def run_diagnostics(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+def run_diagnostics(
+    include_letter: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
     """
-    Сводная проверка приложения: настройки, поиск, БД, демо-письмо Gemini (без откликов).
+    Сводная проверка приложения: настройки, поиск, БД; демо-письмо Groq только при include_letter=true.
     """
     ran_at = dt.datetime.now(dt.UTC).isoformat()
     checks: list[dict[str, Any]] = []
@@ -373,7 +395,17 @@ def run_diagnostics(db: Session = Depends(get_db), user: User = Depends(get_curr
             }
         )
 
-    if s and groq_ok and resume_ok:
+    if not include_letter:
+        checks.append(
+            {
+                "id": "ai_letter_demo",
+                "ok": True,
+                "skipped": True,
+                "label": "AI: письмо к вакансии с hh.ru",
+                "detail": "Пропущено: передайте include_letter=true для одного запроса к Groq",
+            }
+        )
+    elif s and groq_ok and resume_ok:
         try:
             letter_demo = build_letter_demo_payload(db, user.id, s)
             checks.append(

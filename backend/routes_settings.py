@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from .auth import get_current_user
 from .deps import get_db
 from .crypto import decrypt_secret, encrypt_secret
-from .gemini import generate_cover_letter
+from .letter_generation import generate_cover_letter
 from .models import SearchConfig, UserSettings
 from .schemas import SettingsIn, SettingsOut
 from .resume_pdf import MAX_RESUME_PDF_BYTES, extract_resume_pdf_text

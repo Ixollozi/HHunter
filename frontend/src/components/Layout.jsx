@@ -55,7 +55,7 @@ export function Layout() {
                 </NavItem>
                 <NavItem
                   to="/settings"
-                  title="Ключ Gemini и текст резюме для генерации писем."
+                  title="Ключ Groq и текст резюме для генерации писем."
                 >
                   Настройки
                 </NavItem>
