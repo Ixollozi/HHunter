@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>HHunter</title>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="title">HHunter</div>
+      <div class="row">
+        <label>API base</label>
+        <input id="apiBase" placeholder="http://localhost:8000" />
+      </div>
+      <div class="row">
+        <label>JWT token</label>
+        <input id="token" placeholder="Bearer token из сайта" />
+      </div>
+      <div class="row buttons">
+        <button id="btnSave">Сохранить</button>
+        <button id="btnToggle">Запустить</button>
+      </div>
+
+      <div class="box">
+        <div id="modelLine" class="muted">—</div>
+        <div id="statsLine" class="muted">—</div>
+        <div id="lastLine" class="muted">—</div>
+      </div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
+

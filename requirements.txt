@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic
+pydantic-settings
+python-jose[cryptography]
+bcrypt
+google-genai
+groq
+cryptography
+alembic
+openpyxl
+python-multipart
+pypdf
+pdfplumber

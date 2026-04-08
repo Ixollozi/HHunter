@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "HHunter",
+  "version": "1.0.0",
+  "description": "Отклики на hh.ru: письмо с бэкенда HHunter (Gemini), сохранение в личном кабинете.",
+  "permissions": ["storage", "tabs", "scripting", "activeTab"],
+  "host_permissions": [
+    "https://hh.ru/*",
+    "https://*.hh.ru/*",
+    "http://localhost:5173/*",
+    "http://127.0.0.1:5173/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://hh.ru/*", "https://*.hh.ru/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "HHunter"
+  }
+}

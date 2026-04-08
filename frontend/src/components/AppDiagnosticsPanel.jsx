@@ -1,0 +1,376 @@
+import { useCallback, useState } from 'react'
+import { api } from '../lib/api'
+import { apiBaseUrl } from '../lib/api'
+import { getToken } from '../lib/auth'
+import { btnNeutral, btnPrimary } from '../ui/hover'
+
+const SEARCH_LABELS = {
+  search_text: 'Текст поиска',
+  search_fields: 'Поля поиска',
+  area: 'Регион',
+  experience: 'Опыт',
+  employment: 'Тип занятости',
+  schedule: 'График',
+  period: 'Период',
+  salary: 'Зарплата',
+  only_with_salary: 'Только с зарплатой',
+  order_by: 'Сортировка',
+  delay_min: 'Пауза мин., с',
+  delay_max: 'Пауза макс., с',
+  daily_limit: 'Лимит в день',
+}
+
+function formatSearchValue(v) {
+  if (v == null || v === '') return '—'
+  if (Array.isArray(v)) return v.length ? v.join(', ') : '—'
+  if (typeof v === 'boolean') return v ? 'да' : 'нет'
+  return String(v)
+}
+
+export function AppDiagnosticsPanel() {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [liveLog, setLiveLog] = useState([])
+  const [liveStep, setLiveStep] = useState('')
+
+  const run = useCallback(async () => {
+    setErr('')
+    setLoading(true)
+    setLiveLog([])
+    setLiveStep('Запуск…')
+    try {
+      const token = getToken()
+      const res = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/diagnostics/run-stream`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || `HTTP ${res.status}`)
+      }
+      const reader = res.body.getReader()
+      const dec = new TextDecoder('utf-8')
+      let buf = ''
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        let idx
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).trim()
+          buf = buf.slice(idx + 1)
+          if (!line) continue
+          let evt
+          try {
+            evt = JSON.parse(line)
+          } catch {
+            continue
+          }
+          if (evt.stage === 'step') {
+            setLiveStep(String(evt.message || ''))
+          }
+          if (evt.stage === 'check') {
+            const c = evt.check
+            if (c?.label) {
+              setLiveLog((p) => [...p, `${evt.t_ms}ms · ${c.ok ? 'OK' : c.skipped ? 'SKIP' : 'FAIL'} · ${c.label}`])
+            }
+            // partial updates
+            setData((prev) => ({
+              ...(prev || {}),
+              ...(evt.search_snapshot ? { search_snapshot: evt.search_snapshot } : null),
+              ...(evt.vacancy_preview ? { vacancy_preview: evt.vacancy_preview } : null),
+              ...(evt.letter_demo ? { letter_demo: evt.letter_demo } : null),
+              ...(evt.check ? { checks: [...((prev?.checks || [])), evt.check] } : null),
+            }))
+          }
+          if (evt.stage === 'final') {
+            setLiveStep('Готово')
+            setData(evt.data)
+          }
+        }
+      }
+    } catch (e) {
+      const detail = e.response?.data?.detail
+      const msg =
+        typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((x) => x.msg || x).join('; ')
+            : e.message || 'Ошибка запроса'
+      setErr(String(msg))
+      setData(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  function openPanel() {
+    setOpen(true)
+    setCopied(false)
+    run()
+  }
+
+  function closePanel() {
+    setOpen(false)
+    setErr('')
+    setData(null)
+    setCopied(false)
+  }
+
+  async function copyLetter() {
+    const text = data?.letter_demo?.letter
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const letter = data?.letter_demo
+  const vacancy =
+    data?.vacancy_preview?.vacancy ||
+    data?.letter_demo?.vacancy ||
+    null
+  const summaryOk = data?.extra?.summary_ok
+  const checks = data?.checks ?? []
+  const snap = data?.search_snapshot
+
+  return (
+    <>
+      <div className="fixed bottom-0 inset-x-0 z-40 border-t border-slate-800 bg-slate-950/95 backdrop-blur px-4 py-3 shadow-[0_-8px_30px_rgba(0,0,0,0.35)]">
+        <div className="mx-auto max-w-6xl flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-slate-400 min-w-0">
+            Проверка: настройки, параметры поиска, hh.ru API и письмо (Groq/Qwen) — без отправки отклика.
+          </p>
+          <button
+            type="button"
+            onClick={openPanel}
+            disabled={loading && open}
+            className={`shrink-0 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60 ${btnPrimary}`}
+          >
+            {loading && open ? 'Проверка…' : 'Протестировать приложение'}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4 bg-slate-950/75 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="diag-panel-title"
+          onClick={(e) => e.target === e.currentTarget && closePanel()}
+        >
+          <div
+            className="flex max-h-[min(92vh,760px)] w-full max-w-2xl flex-col rounded-t-2xl border border-slate-700/90 bg-slate-900 shadow-2xl shadow-black/50 sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 px-5 py-4 shrink-0">
+              <div>
+                <h2 id="diag-panel-title" className="text-lg font-semibold text-slate-50">
+                  Проверка приложения
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {data?.ran_at ? `Запуск: ${data.ran_at}` : ' '}
+                  {summaryOk != null && data?.ran_at ? ' · ' : ''}
+                  {summaryOk != null ? (
+                    <span className={summaryOk ? 'text-emerald-400' : 'text-amber-400'}>
+                      {summaryOk ? 'Критические пункты в порядке' : 'Есть замечания'}
+                    </span>
+                  ) : null}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closePanel}
+                className={`rounded-lg px-2.5 py-1.5 text-sm text-slate-400 hover:bg-slate-800 hover:text-white ${btnNeutral}`}
+              >
+                Закрыть
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-5">
+              {err ? (
+                <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                  {err}
+                </div>
+              ) : null}
+
+              {loading && !data ? (
+                <div className="text-sm text-slate-400">Выполняется проверка…</div>
+              ) : null}
+              {liveStep ? (
+                <div className="rounded-xl border border-slate-700/70 bg-slate-950/40 px-4 py-3 text-sm text-slate-200">
+                  <div className="text-xs text-slate-500 mb-1">Текущий шаг</div>
+                  {liveStep}
+                </div>
+              ) : null}
+              {liveLog.length ? (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/30 px-4 py-3">
+                  <div className="text-xs text-slate-500 mb-2">Логи теста (в реальном времени)</div>
+                  <pre className="text-xs text-slate-300 whitespace-pre-wrap max-h-40 overflow-auto">{liveLog.join('\n')}</pre>
+                </div>
+              ) : null}
+
+              {checks.length > 0 ? (
+                <section className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-wide text-indigo-400/90">Чеклист</div>
+                  <ul className="space-y-2">
+                    {checks.map((c, i) => (
+                      <li
+                        key={`${c.id}-${i}`}
+                        className={`rounded-lg border px-3 py-2 text-sm ${
+                          c.skipped
+                            ? 'border-slate-700/60 bg-slate-950/40 text-slate-400'
+                            : c.ok
+                              ? 'border-emerald-500/25 bg-emerald-500/5 text-slate-200'
+                              : 'border-amber-500/30 bg-amber-500/5 text-amber-100'
+                        }`}
+                      >
+                        <div className="font-medium flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`inline-block h-2 w-2 rounded-full shrink-0 ${
+                              c.skipped ? 'bg-slate-500' : c.ok ? 'bg-emerald-400' : 'bg-amber-400'
+                            }`}
+                          />
+                          {c.label}
+                          {c.skipped ? <span className="text-xs text-slate-500">(пропуск)</span> : null}
+                        </div>
+                        {c.detail ? <div className="text-xs text-slate-400 mt-1">{c.detail}</div> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
+              {snap ? (
+                <section className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-wide text-indigo-400/90">
+                    Снимок параметров поиска
+                  </div>
+                  <dl className="rounded-xl border border-slate-700/80 bg-slate-950/50 divide-y divide-slate-800/80 text-sm">
+                    {Object.entries(SEARCH_LABELS).map(([key, label]) => (
+                      <div key={key} className="flex gap-3 px-3 py-2 justify-between">
+                        <dt className="text-slate-500 shrink-0">{label}</dt>
+                        <dd className="text-slate-200 text-right min-w-0 break-words">{formatSearchValue(snap[key])}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              ) : (
+                !loading &&
+                data && (
+                  <div className="text-sm text-slate-500">Нет сохранённых параметров поиска — раздел «Поиск».</div>
+                )
+              )}
+
+              <section className="space-y-2">
+                <div className="text-xs font-medium uppercase tracking-wide text-indigo-400/90">Доступные модели Groq</div>
+                <div className="rounded-xl border border-slate-700/80 bg-slate-950/40 px-4 py-3 text-sm text-slate-300 space-y-1">
+                  <div>
+                    ⭐ <span className="text-slate-100 font-medium">Qwen3 32B</span> — <code className="text-slate-200">qwen/qwen3-32b</code>
+                  </div>
+                  <div>
+                    <span className="text-slate-100 font-medium">Llama 3.3 70B</span> — <code className="text-slate-200">llama-3.3-70b-versatile</code>
+                  </div>
+                  <div>
+                    <span className="text-slate-100 font-medium">Llama 4 Scout</span> — <code className="text-slate-200">llama-4-scout-instruct</code>
+                  </div>
+                  <div>
+                    <span className="text-slate-100 font-medium">Llama 3.1 8B</span> — <code className="text-slate-200">llama-3.1-8b-instant</code>
+                  </div>
+                  <div className="text-xs text-slate-500 pt-1">
+                    Модель выбирается в разделе «Настройки».
+                  </div>
+                </div>
+              </section>
+
+              {vacancy ? (
+                <section className="rounded-xl border border-slate-700/80 bg-slate-950/60 px-4 py-3 space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-wide text-indigo-400/90">
+                    Вакансия с hh.ru (по вашему поиску)
+                  </div>
+                  <div className="text-base font-medium text-slate-100">{vacancy.title}</div>
+                  <div className="text-sm text-slate-400">{vacancy.company_name}</div>
+                  {vacancy.hh_url ? (
+                    <a
+                      href={vacancy.hh_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Открыть эту вакансию на hh.ru"
+                      className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-400 hover:text-indigo-300 underline-offset-4 hover:underline"
+                    >
+                      Открыть вакансию на hh.ru
+                      <span aria-hidden className="text-slate-500 text-xs font-normal">
+                        (новая вкладка)
+                      </span>
+                    </a>
+                  ) : null}
+                  <p className="text-sm text-slate-300 leading-relaxed line-clamp-4 sm:line-clamp-none">
+                    {vacancy.description}
+                  </p>
+                  {vacancy.skills?.length ? (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {vacancy.skills.map((sk) => (
+                        <span
+                          key={sk}
+                          className="rounded-md bg-slate-800/80 px-2 py-0.5 text-xs text-slate-300 border border-slate-700/60"
+                        >
+                          {sk}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {letter?.letter != null ? (
+                <section className="space-y-2">
+                  <div
+                    className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
+                      letter.validation_ok
+                        ? 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/25'
+                        : 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/25'
+                    }`}
+                  >
+                    Проверка текста: {letter.validation_message || '—'}
+                  </div>
+                  <div className="rounded-xl border border-slate-700/70 bg-slate-950/50 px-4 py-3">
+                    <div className="text-xs text-slate-500 mb-2">Сопроводительное письмо</div>
+                    <p className="text-sm text-slate-100 leading-relaxed whitespace-pre-wrap">{letter.letter}</p>
+                  </div>
+                </section>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-800 px-5 py-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => run()}
+                disabled={loading}
+                className={`rounded-xl bg-slate-700 px-4 py-2 text-sm text-white hover:bg-slate-600 disabled:opacity-50 ${btnNeutral}`}
+              >
+                {loading ? 'Обновление…' : 'Повторить проверку'}
+              </button>
+              {letter?.letter ? (
+                <button
+                  type="button"
+                  onClick={copyLetter}
+                  className={`rounded-xl border border-slate-600 bg-slate-800/80 px-4 py-2 text-sm text-slate-100 hover:bg-slate-700 ${btnNeutral}`}
+                >
+                  {copied ? 'Скопировано' : 'Копировать письмо'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
