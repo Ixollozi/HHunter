@@ -23,13 +23,17 @@ label {
   font-size: 12px;
   color: #9ca3af;
 }
-input {
+input,
+select {
   background: #0f172a;
   border: 1px solid #334155;
   color: #e5e7eb;
   border-radius: 8px;
   padding: 6px 8px;
   font-size: 12px;
+}
+select {
+  max-width: 100%;
 }
 .buttons {
   grid-template-columns: 1fr 1fr;
@@ -76,4 +80,20 @@ button#btnPullToken {
 }
 button#btnPullToken:hover {
   background: #234a78;
+}
+
+label.check {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11px;
+  color: #cbd5e1;
+  line-height: 1.35;
+  cursor: pointer;
+}
+label.check input {
+  width: auto;
+  margin: 2px 0 0 0;
+  flex-shrink: 0;
 }

@@ -8,7 +8,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // https://vite.dev/config/
 export default defineConfig({
+  appType: 'spa',
   plugins: [react()],
+  // start.py без --dev поднимает «vite preview»; без no-store браузер может долго держать старый index.html.
+  preview: {
+    headers: {
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+    },
+  },
   server: {
     fs: {
       allow: [path.resolve(__dirname, '..')],

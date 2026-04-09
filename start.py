@@ -2,6 +2,9 @@
 """
 Запуск HHunter из корня репозитория.
 
+Без --dev фронт поднимается через vite preview: перед стартом выполняется npm run build,
+если нет dist/ или файлы в frontend/src новее dist/index.html (чтобы правки UI не «терялись»).
+
 Ожидаемая структура:
   <repo>/
     .venv/              интерпретатор (python -m venv .venv в корне)
@@ -27,6 +30,21 @@ ROOT = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT / "backend"
 FRONTEND_DIR = ROOT / "frontend"
 DATABASE_DIR = ROOT / "database"
+
+# Файлы фронта, при изменении которых нужен npm run build (режим preview).
+_FRONTEND_ROOT_WATCH = (
+    "vite.config.js",
+    "vite.config.ts",
+    "tailwind.config.js",
+    "postcss.config.js",
+    "index.html",
+    "package.json",
+    "package-lock.json",
+)
+# Исходники в src/ + статика в public/
+_FRONTEND_SRC_SUFFIXES = frozenset(
+    {".jsx", ".tsx", ".js", ".ts", ".mjs", ".cjs", ".css", ".json", ".html", ".svg", ".md", ".woff2"}
+)
 
 
 def venv_python() -> Path:
@@ -70,6 +88,58 @@ def _run_checked(cmd: list[str], cwd: Path) -> int:
     return int(r.returncode or 0)
 
 
+def _max_mtime_tree(root: Path, suffixes: frozenset[str]) -> float | None:
+    """Самый новый mtime среди файлов под root с указанными расширениями."""
+    if not root.is_dir():
+        return None
+    newest: float | None = None
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        suf = p.suffix.lower()
+        if suf not in suffixes:
+            continue
+        try:
+            m = p.stat().st_mtime
+            if newest is None or m > newest:
+                newest = m
+        except OSError:
+            continue
+    return newest
+
+
+def frontend_preview_needs_build(frontend_dir: Path) -> bool:
+    """
+    True, если для vite preview нужна свежая сборка: нет dist или исходники новее dist/index.html.
+
+    Раньше сборка делалась только при отсутствии dist — из‑за этого UI «застывал» после правок в src/.
+    """
+    dist_index = frontend_dir / "dist" / "index.html"
+    if not dist_index.exists():
+        return True
+    try:
+        dist_mtime = dist_index.stat().st_mtime
+    except OSError:
+        return True
+    for name in _FRONTEND_ROOT_WATCH:
+        p = frontend_dir / name
+        if p.is_file():
+            try:
+                if p.stat().st_mtime > dist_mtime:
+                    return True
+            except OSError:
+                return True
+    src_dir = frontend_dir / "src"
+    m_src = _max_mtime_tree(src_dir, _FRONTEND_SRC_SUFFIXES)
+    if m_src is not None and m_src > dist_mtime:
+        return True
+    public_dir = frontend_dir / "public"
+    m_pub = _max_mtime_tree(public_dir, _FRONTEND_SRC_SUFFIXES)
+    if m_pub is not None and m_pub > dist_mtime:
+        return True
+    return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="HHunter starter (lightweight by default).")
     ap.add_argument("--dev", action="store_true", help="Dev mode: uvicorn --reload + vite dev (heavy).")
@@ -82,6 +152,16 @@ def main() -> int:
         "--migrate",
         action="store_true",
         help="Run alembic upgrade head before starting backend (recommended).",
+    )
+    ap.add_argument(
+        "--force-frontend-build",
+        action="store_true",
+        help="Всегда выполнить npm run build перед preview (режим без --dev).",
+    )
+    ap.add_argument(
+        "--skip-frontend-build",
+        action="store_true",
+        help="Не пересобирать фронт перед preview, даже если исходники новее dist (быстрый старт).",
     )
     args = ap.parse_args()
 
@@ -185,9 +265,15 @@ def main() -> int:
             if args.dev:
                 procs.append(_safe_popen([npm, "run", "dev"], cwd=FRONTEND_DIR))
             else:
-                # Lightweight mode: build once (if needed), then serve with vite preview (no file watching).
-                dist_dir = FRONTEND_DIR / "dist"
-                if not dist_dir.exists():
+                # Режим preview: dist без HMR. Пересобираем, если нет dist или исходники новее сборки.
+                dist_index = FRONTEND_DIR / "dist" / "index.html"
+                if not dist_index.exists():
+                    need_build = True
+                else:
+                    need_build = args.force_frontend_build or (
+                        not args.skip_frontend_build and frontend_preview_needs_build(FRONTEND_DIR)
+                    )
+                if need_build:
                     print("Frontend build (npm run build)...")
                     rc = _run_checked([npm, "run", "build"], cwd=FRONTEND_DIR)
                     if rc != 0:
@@ -206,7 +292,7 @@ def main() -> int:
     print("Корень проекта:", ROOT)
     backend_url = f"http://{args.host}:{args.port}" if not args.no_backend else "(backend off)"
     frontend_url = f"http://127.0.0.1:{args.frontend_port}" if not args.no_frontend else "(frontend off)"
-    mode = "DEV (heavy)" if args.dev else "LIGHT (recommended)"
+    mode = "DEV (vite + uvicorn --reload)" if args.dev else "LIGHT (preview: авто-сборка при изменении src)"
     print(f"Режим: {mode}")
     print(f"Бэкенд: {backend_url}  |  Фронт: {frontend_url}")
     print("Ctrl+C — остановить оба процесса.")

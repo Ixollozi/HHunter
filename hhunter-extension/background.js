@@ -1,8 +1,43 @@
-importScripts('utils/api.js')
+importScripts('utils/api.js', 'utils/searchUrl.js')
+
+/** Для chrome.scripting.executeScript: тело копируется в страницу, без замыканий. */
+async function serpCollectAsync() {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  let prev = 0
+  let stable = 0
+  while (stable < 3) {
+    window.scrollTo(0, document.body.scrollHeight)
+    await sleep(900)
+    const n = document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]').length
+    if (n === prev) stable += 1
+    else {
+      stable = 0
+      prev = n
+    }
+  }
+  const ids = []
+  const seen = new Set()
+  document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]').forEach((card) => {
+    const a =
+      card.querySelector('a[data-qa="serp-item__title"]') || card.querySelector('a[href*="/vacancy/"]')
+    if (!a || !a.href) return
+    const m = a.href.match(/\/vacancy\/(\d+)/)
+    if (m && !seen.has(m[1])) {
+      seen.add(m[1])
+      ids.push(m[1])
+    }
+  })
+  const nextEl = document.querySelector('[data-qa="pager-next"]')
+  const nextHref = nextEl && nextEl.href ? nextEl.href : null
+  return { ids, nextHref }
+}
 
 const STATE_KEY = 'hhunter_state'
 const TOKEN_KEY = 'hhunter_token'
 const API_BASE_KEY = 'hhunter_api_base'
+const RUN_MODE_KEY = 'hhunter_run_mode'
+const HH_ORIGIN_KEY = 'hhunter_hh_origin'
+const DEFAULT_HH_ORIGIN = 'https://hh.ru'
 const SETTINGS_TTL_MS = 45_000
 
 let settingsCache = {
@@ -30,13 +65,179 @@ function randBetween(a, b) {
   return a + Math.random() * (b - a)
 }
 
-/** Не блокировать onMessage: опрос popup может отсутствовать */
+/** Не засыпать БД одинаковыми шагами при частых перезапусках mainLoop (опрос UI, двойные сообщения). */
+const logThrottleAt = new Map()
+const LOG_THROTTLE_MS = {
+  main_loop_begin: 2200,
+  active_tab_start: 2200,
+  active_tab_finish: 2200,
+  active_tab_wrong_host: 14000,
+  active_tab_not_vacancy: 14000,
+  active_tab_no_tab: 14000,
+}
+
+function logThrottleAllow(step, message) {
+  const st = String(step || '')
+  const ms = LOG_THROTTLE_MS[st]
+  if (ms == null) return true
+  const key = `${st}::${String(message).slice(0, 280)}`
+  const now = Date.now()
+  const prev = logThrottleAt.get(key)
+  if (prev != null && now - prev < ms) return false
+  logThrottleAt.set(key, now)
+  if (logThrottleAt.size > 100) {
+    const cutoff = now - 120000
+    for (const [k, t] of logThrottleAt.entries()) {
+      if (t < cutoff) logThrottleAt.delete(k)
+    }
+  }
+  return true
+}
+
+/** Журнал на сервер (вкладка «Логи» в HHunter). Ошибки глотаем — не блокируем цикл. */
+async function extActivityLog(level, message, source, step) {
+  try {
+    if (!logThrottleAllow(step, message)) return
+    const apiBase = await getApiBase()
+    const token = await getToken()
+    if (!token) return
+    await apiFetch(apiBase, token, '/extension/log', {
+      method: 'POST',
+      body: JSON.stringify({
+        level: String(level || 'INFO').toUpperCase(),
+        message: String(message || '').slice(0, 3800),
+        source: source || 'extension_bg',
+        step: step || null,
+      }),
+    })
+  } catch (_) {
+    /* */
+  }
+}
+
+function tabsSendOnce(tabId, message) {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.tabs.sendMessage(tabId, message, (r) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message))
+        else resolve(r)
+      })
+    } catch (e) {
+      reject(e)
+    }
+  })
+}
+
+/**
+ * Доставка в content: при «нет получателя» — программная инъекция content.js и повтор.
+ * Таймаут 180 с: генерация письма и модалки HH могут занимать >2 мин.
+ */
+async function tabsSendMessageWithTimeout(tabId, message, timeoutMs) {
+  const ms = timeoutMs || 180000
+  async function sendWithOptionalInject() {
+    try {
+      return await tabsSendOnce(tabId, message)
+    } catch (e) {
+      const errText = String((e && e.message) || e)
+      if (
+        !/Receiving end does not exist|Could not establish connection|The message port closed before a response was received/i.test(
+          errText,
+        )
+      ) {
+        throw e
+      }
+      try {
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] })
+      } catch (injErr) {
+        throw new Error(
+          `${errText} (повторная инъекция: ${String((injErr && injErr.message) || injErr)})`,
+        )
+      }
+      await sleep(300)
+      return await tabsSendOnce(tabId, message)
+    }
+  }
+  try {
+    return await Promise.race([
+      sendWithOptionalInject(),
+      new Promise((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Нет ответа от страницы за ${Math.round(ms / 1000)} с (вкладка перезагрузилась или content script не успел). Обновите страницу HeadHunter (hh.ru / hh.uz и т.д.).`,
+              ),
+            ),
+          ms,
+        ),
+      ),
+    ])
+  } catch (e) {
+    const errText = String((e && e.message) || e)
+    if (
+      /message channel closed before a response was received|asynchronous response by returning true|The message port closed/i.test(
+        errText,
+      )
+    ) {
+      const recovered = await tryRecoverApplyAfterContentNav(tabId)
+      if (recovered) return recovered
+    }
+    throw e
+  }
+}
+
+/** Content умер при переходе (чат HH в той же вкладке); учёт отклика по заранее сохранённому payload. */
+async function tryRecoverApplyAfterContentNav(tabId) {
+  if (tabId == null) return null
+  const key = `hhunter_nav_guard_${tabId}`
+  let raw
+  try {
+    raw = await chrome.storage.session.get(key)
+  } catch {
+    return null
+  }
+  const g = raw[key]
+  if (!g || !g.savePayload || Date.now() - (g.ts || 0) > 90000) {
+    try {
+      await chrome.storage.session.remove(key)
+    } catch {
+      /* */
+    }
+    return null
+  }
+  try {
+    await chrome.storage.session.remove(key)
+  } catch {
+    /* */
+  }
+  try {
+    const apiBase = await getApiBase()
+    const token = await getToken()
+    if (token) {
+      await apiFetch(apiBase, token, '/extension/save-application', {
+        method: 'POST',
+        body: JSON.stringify({ ...g.savePayload, status: 'sent' }),
+      })
+    }
+  } catch {
+    /* */
+  }
+  void extActivityLog(
+    'INFO',
+    'Вкладка перешла (чат/навигация HH) до ответа content — отклик записан на сервер из service worker',
+    'extension_bg',
+    'active_tab_nav_recover',
+  )
+  const semi = !!g.semiAuto
+  return { ok: true, submitted: !semi, via_chat: true, navigated_recover: true }
+}
+
 function broadcastState(state) {
   setTimeout(() => {
     try {
       chrome.runtime.sendMessage({ type: 'state', state })
     } catch (_) {
-      /* нет слушателя — нормально */
+      /* */
     }
   }, 0)
 }
@@ -85,33 +286,81 @@ async function loadSettings(force = false) {
 
 let loopPromise = null
 
-function isHhVacancyUrl(url) {
-  return /https?:\/\/([^/]*\.)?hh\.ru\/vacancy\/\d+/i.test(String(url || ''))
-}
-
 function isHhHost(url) {
   try {
     const u = new URL(String(url || 'about:blank'))
-    return u.hostname === 'hh.ru' || u.hostname.endsWith('.hh.ru')
+    const h = u.hostname.toLowerCase()
+    if (h === 'hh.ru' || h.endsWith('.hh.ru')) return true
+    if (h === 'hh.uz' || h.endsWith('.hh.uz')) return true
+    if (h === 'hh.kz' || h.endsWith('.hh.kz')) return true
+    return false
   } catch {
     return false
   }
 }
 
+function isHhVacancyUrl(url) {
+  return isHhHost(url) && /\/vacancy\/\d+/i.test(String(url || ''))
+}
+
+async function getHhWebOrigin() {
+  const st = await chrome.storage.local.get(HH_ORIGIN_KEY)
+  let raw = String(st[HH_ORIGIN_KEY] || DEFAULT_HH_ORIGIN).trim().replace(/\/$/, '')
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'https:') throw new Error('need https')
+    if (!isHhHost(u.href)) raw = DEFAULT_HH_ORIGIN
+    else return u.origin
+  } catch {
+    raw = DEFAULT_HH_ORIGIN
+  }
+  return new URL(DEFAULT_HH_ORIGIN).origin
+}
+
+function waitTabComplete(tabId) {
+  return new Promise((resolve) => {
+    function onUpdated(id, info) {
+      if (id === tabId && info.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated)
+        resolve()
+      }
+    }
+    chrome.tabs.onUpdated.addListener(onUpdated)
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        chrome.tabs.onUpdated.removeListener(onUpdated)
+        resolve()
+        return
+      }
+      if (tab && tab.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated)
+        resolve()
+      }
+    })
+  })
+}
+
 async function runOnceOnActiveTab() {
+  void extActivityLog('INFO', 'Режим активной вкладки: старт', 'extension_bg', 'active_tab_start')
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (!tab?.id) return
+  if (!tab?.id) {
+    void extActivityLog('WARNING', 'Нет активной вкладки', 'extension_bg', 'active_tab_no_tab')
+    return
+  }
   const url = tab.url || ''
   if (!isHhHost(url)) {
+    void extActivityLog('WARNING', `Активная вкладка не HeadHunter: ${url.slice(0, 120)}`, 'extension_bg', 'active_tab_wrong_host')
     await setState({
       last: {
         level: 'WARNING',
-        message: 'Сделайте активной вкладку с hh.ru (страница вакансии), затем снова «Запустить».',
+        message:
+          'Сделайте активной вкладку с сайта HeadHunter (hh.ru, tashkent.hh.uz, …) — страница вакансии, затем «Запустить».',
       },
     })
     return
   }
   if (!isHhVacancyUrl(url)) {
+    void extActivityLog('WARNING', 'Нужна страница вакансии /vacancy/{id}, не список поиска', 'extension_bg', 'active_tab_not_vacancy')
     await setState({
       last: {
         level: 'WARNING',
@@ -120,34 +369,267 @@ async function runOnceOnActiveTab() {
     })
     return
   }
+  await waitTabComplete(tab.id)
+  await sleep(180)
+  void extActivityLog('INFO', `Отправка в content script: ${url}`, 'extension_bg', 'active_tab_send')
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'hhunter_run_once' })
-  } catch {
+    const r = await tabsSendMessageWithTimeout(tab.id, { type: 'hhunter_run_once', autoSubmit: false }, 180000)
+    void extActivityLog(
+      'INFO',
+      `Ответ content: ok=${r?.ok} submitted=${r?.submitted} err=${r?.error || '—'}${r?.navigated_recover ? ' · восстановлено после перехода' : ''}${r?.chat_new_tab ? ' · чат в новой вкладке' : ''}`,
+      'extension_bg',
+      'active_tab_done',
+    )
+  } catch (e) {
+    void extActivityLog('ERROR', String(e.message || e), 'extension_bg', 'active_tab_send_failed')
     await setState({
       last: {
         level: 'WARNING',
-        message: 'Нажмите F5 на странице hh.ru (после установки расширения), затем «Запустить».',
+        message:
+          (e.message || String(e)) +
+          ' Если текст про «message channel closed» — обновите F5 страницу вакансии и повторите.',
       },
     })
   }
 }
 
-async function mainLoop() {
+async function fullAutoLoop() {
+  let apiBase
+  let token
+  let settings
+  try {
+    ;({ apiBase, token, settings } = await loadSettings(true))
+  } catch (e) {
+    void extActivityLog('ERROR', `Настройки API: ${e.message || e}`, 'extension_bg', 'full_auto_settings_fail')
+    await setState({
+      running: false,
+      last: { level: 'ERROR', message: `Настройки: ${e.message || e}` },
+    })
+    return
+  }
+  const search = settings.search || {}
+  if (!String(search.search_text || '').trim()) {
+    void extActivityLog('WARNING', 'Нет search_text в сохранённом поиске HHunter', 'extension_bg', 'full_auto_no_search_text')
+    await setState({
+      running: false,
+      last: { level: 'WARNING', message: 'Укажите текст поиска в разделе «Поиск» на сайте HHunter.' },
+    })
+    return
+  }
+  const dailyLimit = Math.min(parseInt(settings.daily_limit, 10) || 200, 500)
+  const hourlyLimit = Math.min(Math.max(parseInt(settings.hourly_limit, 10) || 35, 10), 80)
+  const hhOrigin = await getHhWebOrigin()
+  let searchUrl = buildSearchUrl(search, hhOrigin)
+  void extActivityLog(
+    'INFO',
+    `Полный цикл: лимит день ${dailyLimit}, час ${hourlyLimit}, сайт ${hhOrigin}, первая выдача ${searchUrl}`,
+    'extension_bg',
+    'full_auto_begin',
+  )
+
   while (true) {
-    const st = await getState()
-    if (!st.running) return
+    const st0 = await getState()
+    if (!st0.running) return
+
+    let fresh
     try {
-      await runOnceOnActiveTab()
-    } catch (e) {
-      await setState({ last: { level: 'ERROR', message: String(e.message || e) } })
+      fresh = await loadSettings(true)
+    } catch {
+      fresh = { settings }
     }
-    const { settings } = await loadSettings().catch(() => ({ settings: { delay_min: 3, delay_max: 6 } }))
-    const delay = Math.round(randBetween(settings.delay_min || 3, settings.delay_max || 6) * 1000)
-    await sleep(delay)
+    const sentToday = parseInt(fresh.settings.sent_today, 10) || 0
+    const sentHour = parseInt(fresh.settings.sent_last_hour, 10) || 0
+    const hourLim = Math.min(Math.max(parseInt(fresh.settings.hourly_limit, 10) || 35, 10), 80)
+    if (sentToday >= dailyLimit) {
+      void extActivityLog('INFO', `Стоп: лимит UTC ${sentToday}/${dailyLimit}`, 'extension_bg', 'full_auto_limit')
+      await setState({
+        running: false,
+        last: { level: 'INFO', message: `Дневной лимит (UTC): ${sentToday}/${dailyLimit}` },
+      })
+      return
+    }
+    if (sentHour >= hourLim) {
+      void extActivityLog('INFO', `Стоп: лимит за час ${sentHour}/${hourLim}`, 'extension_bg', 'full_auto_hourly_limit')
+      await setState({
+        running: false,
+        last: {
+          level: 'INFO',
+          message: `Лимит откликов за час (UTC): ${sentHour}/${hourLim}. Подождите или увеличьте «за час» в Поиске.`,
+        },
+      })
+      return
+    }
+
+    await setState({ last: { level: 'INFO', message: `Выдача: загрузка…` } })
+    void extActivityLog('INFO', `SERP загрузка: ${searchUrl}`, 'extension_bg', 'full_auto_serp_open')
+    let tab
+    try {
+      tab = await chrome.tabs.create({ url: searchUrl, active: false })
+    } catch (e) {
+      await setState({ last: { level: 'ERROR', message: `Вкладка: ${e.message || e}` } })
+      await sleep(3000)
+      continue
+    }
+    await waitTabComplete(tab.id)
+    await sleep(1300)
+
+    let collected
+    try {
+      const inj = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: serpCollectAsync,
+      })
+      collected = inj[0]?.result
+    } catch (e) {
+      await chrome.tabs.remove(tab.id).catch(() => {})
+      await setState({ last: { level: 'ERROR', message: `Сбор SERP: ${e.message || e}` } })
+      await sleep(4000)
+      continue
+    }
+    await chrome.tabs.remove(tab.id).catch(() => {})
+
+    const ids = collected?.ids || []
+    const nextHref = collected?.nextHref || null
+    void extActivityLog(
+      'INFO',
+      `SERP собрано id: ${ids.length}, следующая страница: ${nextHref ? 'да' : 'нет'}`,
+      'extension_bg',
+      'full_auto_serp_collected',
+    )
+
+    if (ids.length === 0) {
+      void extActivityLog('WARNING', 'На выдаче 0 вакансий (селекторы или пустой запрос)', 'extension_bg', 'full_auto_serp_empty')
+      await setState({
+        running: false,
+        last: { level: 'INFO', message: 'Нет вакансий на странице поиска или не совпали селекторы DOM.' },
+      })
+      return
+    }
+
+    for (const vid of ids) {
+      const st = await getState()
+      if (!st.running) return
+
+      try {
+        const chk = await apiFetch(
+          apiBase,
+          token,
+          `/extension/vacancy-known?vacancy_id=${encodeURIComponent(vid)}`,
+          { method: 'GET' },
+        )
+        if (chk && chk.already_applied) {
+          void extActivityLog('INFO', `Пропуск ${vid}: уже в базе`, 'extension_bg', 'full_auto_skip_known')
+          continue
+        }
+      } catch {
+        /* игнор — продолжим */
+      }
+
+      let stFresh
+      try {
+        stFresh = await loadSettings(true)
+      } catch {
+        stFresh = fresh
+      }
+      if ((parseInt(stFresh.settings.sent_today, 10) || 0) >= dailyLimit) {
+        await setState({
+          running: false,
+          last: { level: 'INFO', message: `Лимит (UTC) во время цикла.` },
+        })
+        return
+      }
+      const sh = parseInt(stFresh.settings.sent_last_hour, 10) || 0
+      const hl = Math.min(Math.max(parseInt(stFresh.settings.hourly_limit, 10) || 35, 10), 80)
+      if (sh >= hl) {
+        await setState({
+          running: false,
+          last: { level: 'INFO', message: `Лимит за час (UTC) во время цикла: ${sh}/${hl}.` },
+        })
+        return
+      }
+
+      await setState({ last: { level: 'INFO', message: `Вакансия ${vid}…` } })
+      void extActivityLog('INFO', `Открытие вкладки вакансии ${vid}`, 'extension_bg', 'full_auto_vacancy_open')
+      let vacTab
+      try {
+        vacTab = await chrome.tabs.create({ url: `${hhOrigin}/vacancy/${vid}`, active: false })
+      } catch (e) {
+        void extActivityLog('ERROR', `Вкладка вакансии: ${e.message || e}`, 'extension_bg', 'full_auto_tab_fail')
+        await setState({ last: { level: 'ERROR', message: `Вкладка вакансии: ${e.message || e}` } })
+        continue
+      }
+      await waitTabComplete(vacTab.id)
+      await sleep(550)
+      try {
+        const r = await tabsSendMessageWithTimeout(vacTab.id, { type: 'hhunter_run_once', autoSubmit: true }, 180000)
+        void extActivityLog(
+          'INFO',
+          `Вакансия ${vid}: ok=${r?.ok} submitted=${r?.submitted} err=${r?.error || '—'}`,
+          'extension_bg',
+          'full_auto_vacancy_done',
+        )
+      } catch (e) {
+        void extActivityLog('ERROR', `Вакансия ${vid}: ${e.message || e}`, 'extension_bg', 'full_auto_vacancy_msg_fail')
+        await setState({
+          last: {
+            level: 'WARNING',
+            message:
+              (e.message || String(e)) +
+              ' Частая причина — вкладка закрыла канал до ответа; F5 на странице вакансии и повтор.',
+          },
+        })
+      }
+      await chrome.tabs.remove(vacTab.id).catch(() => {})
+
+      const delaySettings = await loadSettings().catch(() => ({ settings: { delay_min: 2, delay_max: 4 } }))
+      let dmin = Number(delaySettings.settings?.delay_min ?? 2)
+      let dmax = Number(delaySettings.settings?.delay_max ?? 4)
+      if (!Number.isFinite(dmin)) dmin = 2
+      if (!Number.isFinite(dmax)) dmax = 4
+      dmin = Math.max(1.5, dmin)
+      dmax = Math.max(dmin, dmax)
+      await sleep(Math.round(randBetween(dmin, dmax) * 1000))
+    }
+
+    if (nextHref) {
+      void extActivityLog('INFO', 'Переход на следующую страницу выдачи', 'extension_bg', 'full_auto_pager_next')
+      searchUrl = nextHref
+    } else {
+      void extActivityLog('INFO', 'Конец выдачи (нет pager-next)', 'extension_bg', 'full_auto_end')
+      await setState({
+        running: false,
+        last: { level: 'INFO', message: 'Обработана выдача (нет следующей страницы).' },
+      })
+      return
+    }
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+async function mainLoop() {
+  const st0 = await getState()
+  if (!st0.running) return
+  const rm = await chrome.storage.local.get(RUN_MODE_KEY)
+  const mode = rm[RUN_MODE_KEY] || 'active_tab'
+  void extActivityLog('INFO', `mainLoop старт: режим ${mode}`, 'extension_bg', 'main_loop_begin')
+  try {
+    if (mode === 'full_auto') {
+      await fullAutoLoop()
+    } else {
+      await runOnceOnActiveTab()
+    }
+  } catch (e) {
+    void extActivityLog('ERROR', `mainLoop: ${e.message || e}`, 'extension_bg', 'main_loop_error')
+    await setState({ last: { level: 'ERROR', message: String(e.message || e) }, running: false })
+  } finally {
+    // Режим «активная вкладка»: один прогон за нажатие «Запустить», без повторов на той же вакансии.
+    if (mode !== 'full_auto') {
+      await setState({ running: false })
+      void extActivityLog('INFO', 'Режим активной вкладки: завершён', 'extension_bg', 'active_tab_finish')
+    }
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   let replied = false
   function reply(payload) {
     if (replied) return
@@ -161,6 +643,46 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   ;(async () => {
     try {
+      if (msg.type === 'hhunter_keepalive') {
+        return reply({ ok: true })
+      }
+
+      if (msg.type === 'hhunter_apply_nav_guard') {
+        const tid = sender.tab && sender.tab.id
+        if (tid != null && msg.savePayload) {
+          try {
+            await chrome.storage.session.set({
+              [`hhunter_nav_guard_${tid}`]: {
+                ts: Date.now(),
+                savePayload: msg.savePayload,
+                semiAuto: !!msg.semiAuto,
+              },
+            })
+          } catch {
+            /* */
+          }
+        }
+        return reply({ ok: true })
+      }
+
+      if (msg.type === 'hhunter_apply_nav_guard_clear') {
+        const tid = sender.tab && sender.tab.id
+        if (tid != null) {
+          try {
+            await chrome.storage.session.remove(`hhunter_nav_guard_${tid}`)
+          } catch {
+            /* */
+          }
+        }
+        return reply({ ok: true })
+      }
+
+      if (msg.type === 'set_run_mode') {
+        const v = msg.mode === 'full_auto' ? 'full_auto' : 'active_tab'
+        await chrome.storage.local.set({ [RUN_MODE_KEY]: v })
+        return reply({ ok: true })
+      }
+
       if (msg.type === 'set_running') {
         const next = await setState({ running: !!msg.running })
         if (next.running && !loopPromise) {
@@ -187,18 +709,83 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return reply({ ok: true })
       }
 
+      if (msg.type === 'set_hh_origin') {
+        let o = String(msg.origin || DEFAULT_HH_ORIGIN).trim().replace(/\/$/, '')
+        try {
+          const u = new URL(o)
+          if (u.protocol !== 'https:') throw new Error('https only')
+          if (!isHhHost(u.href)) o = DEFAULT_HH_ORIGIN
+          else o = u.origin
+        } catch {
+          o = DEFAULT_HH_ORIGIN
+        }
+        await chrome.storage.local.set({ [HH_ORIGIN_KEY]: o })
+        return reply({ ok: true, hh_origin: o })
+      }
+
       if (msg.type === 'get_state') {
         const st = await getState()
         const forceFresh = !!msg.refresh_settings
+        const rm = await chrome.storage.local.get(RUN_MODE_KEY)
+        const hhOrigin = await getHhWebOrigin()
         try {
           const cfg = await loadSettings(forceFresh)
-          return reply({ ok: true, state: st, ext: cfg?.settings || null, api_error: null })
+          return reply({
+            ok: true,
+            state: st,
+            ext: cfg?.settings || null,
+            api_error: null,
+            run_mode: rm[RUN_MODE_KEY] || 'active_tab',
+            hh_origin: hhOrigin,
+          })
         } catch (e) {
           const api_error =
             e.status === 401
               ? '401: неверный токен. Уберите «Bearer » из поля или нажмите «Токен с сайта».'
               : String(e.message || e)
-          return reply({ ok: true, state: st, ext: null, api_error })
+          return reply({
+            ok: true,
+            state: st,
+            ext: null,
+            api_error,
+            run_mode: rm[RUN_MODE_KEY] || 'active_tab',
+            hh_origin: hhOrigin,
+          })
+        }
+      }
+
+      if (msg.type === 'hhunter_api') {
+        const path = String(msg.path || '')
+        if (!path.startsWith('/extension/')) {
+          return reply({ ok: false, handled: true, error: 'invalid path' })
+        }
+        try {
+          const apiBase = await getApiBase()
+          const token = await getToken()
+          const method = String(msg.method || 'GET').toUpperCase()
+          const bodyRaw = msg.body
+          const base = String(apiBase || '').replace(/\/$/, '')
+          const url = `${base}${path.startsWith('/') ? path : `/${path}`}`
+          const headers = {}
+          if (token) headers.Authorization = `Bearer ${token}`
+          if (bodyRaw != null && method !== 'GET' && method !== 'HEAD') {
+            headers['Content-Type'] = 'application/json'
+          }
+          const res = await fetch(url, {
+            method,
+            headers,
+            body: bodyRaw == null || method === 'GET' || method === 'HEAD' ? undefined : String(bodyRaw),
+          })
+          const text = await res.text()
+          let data = null
+          try {
+            data = text ? JSON.parse(text) : null
+          } catch {
+            data = text
+          }
+          return reply({ ok: true, handled: true, status: res.status, statusOk: res.ok, data })
+        } catch (e) {
+          return reply({ ok: false, handled: true, networkError: String((e && e.message) || e) })
         }
       }
 
@@ -207,6 +794,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const stats = { ...(st.stats || { sent: 0, skipped: 0, error: 0 }) }
         if (msg.kind && stats[msg.kind] != null) stats[msg.kind] += 1
         const next = { ...st, stats, last: msg.last || st.last }
+        if (msg.stop_loop) next.running = false
         await chrome.storage.local.set({ [STATE_KEY]: next })
         broadcastState(next)
         return reply({ ok: true })

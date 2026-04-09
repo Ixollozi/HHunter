@@ -1,12 +1,16 @@
 {
   "manifest_version": 3,
   "name": "HHunter",
-  "version": "1.1.0",
-  "description": "HHunter: авто-отклик на hh.ru через ваш бэкенд (Groq/Qwen).",
+  "version": "1.2.1",
+  "description": "HHunter: авто-отклик на HeadHunter (hh.ru, hh.uz, …) через ваш бэкенд (Groq/Qwen).",
   "permissions": ["storage", "tabs", "scripting", "activeTab"],
   "host_permissions": [
     "https://hh.ru/*",
     "https://*.hh.ru/*",
+    "https://hh.uz/*",
+    "https://*.hh.uz/*",
+    "https://hh.kz/*",
+    "https://*.hh.kz/*",
     "http://localhost:5173/*",
     "http://127.0.0.1:5173/*",
     "http://localhost:8000/*",
@@ -15,7 +19,14 @@
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
-      "matches": ["https://hh.ru/*", "https://*.hh.ru/*"],
+      "matches": [
+        "https://hh.ru/*",
+        "https://*.hh.ru/*",
+        "https://hh.uz/*",
+        "https://*.hh.uz/*",
+        "https://hh.kz/*",
+        "https://*.hh.kz/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

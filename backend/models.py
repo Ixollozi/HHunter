@@ -23,6 +23,7 @@ class User(Base):
     search_configs: Mapped[list["SearchConfig"]] = relationship(back_populates="user")
     sessions: Mapped[list["Session"]] = relationship(back_populates="user")
     applications: Mapped[list["Application"]] = relationship(back_populates="user")
+    activity_logs: Mapped[list["ActivityLog"]] = relationship(back_populates="user")
 
 
 class UserSettings(Base):
@@ -57,8 +58,9 @@ class SearchConfig(Base):
     order_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     delay_min: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
-    delay_max: Mapped[int] = mapped_column(Integer, default=6, nullable=False)
+    delay_max: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     daily_limit: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+    hourly_limit: Mapped[int] = mapped_column(Integer, default=35, nullable=False)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.UTC)
@@ -121,4 +123,22 @@ class Application(Base):
 
     user: Mapped[User] = relationship(back_populates="applications")
     session: Mapped[Session] = relationship(back_populates="applications")
+
+
+class ActivityLog(Base):
+    """Пошаговые записи расширения (и опционально других источников) для вкладки «Логи» в UI."""
+
+    __tablename__ = "activity_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.UTC)
+    )
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    step: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="activity_logs")
 

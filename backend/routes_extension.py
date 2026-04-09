@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import desc, func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -13,7 +13,8 @@ from .deps import get_db
 from .letter_generation import get_quality_letter, vacancy_dict_for_extension
 from .logger import log_app
 from .logger import log_letter_generation
-from .models import Application, SearchConfig, Session as DbSession, User, UserSettings
+from .models import ActivityLog, Application, SearchConfig, Session as DbSession, User, UserSettings
+from .search_params import search_config_dict_from_row
 from .schemas import (
     ExtensionGenerateLetterIn,
     ExtensionGenerateLetterOut,
@@ -24,6 +25,23 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/extension", tags=["extension"])
+
+_KEEP_ACTIVITY_ROWS = 2500
+
+
+def _prune_user_activity_logs(db: Session, user_id: int) -> None:
+    n = db.scalar(select(func.count(ActivityLog.id)).where(ActivityLog.user_id == user_id))
+    if not n or n <= _KEEP_ACTIVITY_ROWS + 400:
+        return
+    to_drop = int(n - _KEEP_ACTIVITY_ROWS)
+    ids = db.scalars(
+        select(ActivityLog.id)
+        .where(ActivityLog.user_id == user_id)
+        .order_by(ActivityLog.id.asc())
+        .limit(to_drop)
+    ).all()
+    if ids:
+        db.execute(delete(ActivityLog).where(ActivityLog.id.in_(ids)))
 
 
 @router.post("/test-provider")
@@ -63,6 +81,10 @@ def _utc_day_start() -> dt.datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _utc_hour_ago() -> dt.datetime:
+    return dt.datetime.now(dt.UTC) - dt.timedelta(hours=1)
+
+
 @router.get("/settings", response_model=ExtensionSettingsOut)
 def extension_settings(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> ExtensionSettingsOut:
     cfg = _latest_search_config(db, user.id)
@@ -74,15 +96,47 @@ def extension_settings(db: Session = Depends(get_db), user: User = Depends(get_c
     st = db.get(UserSettings, user.id)
     groq_model = (st.groq_model if st else None) or None
     groq_configured = bool(st and (st.groq_api_key_enc or "").strip())
+    sent_today = db.scalar(
+        select(func.count(Application.id)).where(
+            Application.user_id == user.id,
+            Application.status == "sent",
+            Application.applied_at >= _utc_day_start(),
+        )
+    )
+    sent_last_hour = db.scalar(
+        select(func.count(Application.id)).where(
+            Application.user_id == user.id,
+            Application.status == "sent",
+            Application.applied_at >= _utc_hour_ago(),
+        )
+    )
+    hourly_raw = int(getattr(cfg, "hourly_limit", 35) or 35)
+    hourly_limit = min(max(hourly_raw, 10), 80)
     return ExtensionSettingsOut(
         daily_limit=int(cfg.daily_limit or 200),
         delay_min=int(cfg.delay_min),
         delay_max=int(cfg.delay_max),
+        hourly_limit=hourly_limit,
+        sent_today=int(sent_today or 0),
+        sent_last_hour=int(sent_last_hour or 0),
+        search=search_config_dict_from_row(cfg),
         username=user.username,
         groq_model=groq_model,
         groq_configured=groq_configured,
         groq_requests_remaining=None,
     )
+
+
+@router.get("/vacancy-known")
+def extension_vacancy_known(
+    vacancy_id: str = Query(..., min_length=1, max_length=64),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, bool]:
+    """Есть ли уже запись по этой вакансии (любой статус) — чтобы не тратить генерацию письма."""
+    vid = str(vacancy_id).strip()
+    exists = db.scalar(select(Application.id).where(Application.user_id == user.id, Application.vacancy_id == vid))
+    return {"already_applied": bool(exists)}
 
 
 @router.post("/generate-letter", response_model=ExtensionGenerateLetterOut)
@@ -103,6 +157,9 @@ def extension_generate_letter(
         body.vacancy_title,
         body.vacancy_description,
         body.company_name,
+        requirements=body.vacancy_requirements or "",
+        key_skills_text=body.key_skills or "",
+        salary_info=body.salary_info or "",
     )
     try:
         api_key = decrypt_secret(st.groq_api_key_enc or "")
@@ -180,6 +237,27 @@ def extension_save_application(
                 detail=f"Достигнут дневной лимит откликов ({daily_limit}). Измените лимит в разделе «Поиск» или продолжите завтра.",
             )
 
+        hourly_limit = min(max(int(getattr(cfg, "hourly_limit", 35) or 35), 10), 80) if cfg else 35
+        sent_hour = db.scalar(
+            select(func.count(Application.id)).where(
+                Application.user_id == user.id,
+                Application.status == "sent",
+                Application.applied_at >= _utc_hour_ago(),
+            )
+        )
+        hcnt = int(sent_hour or 0)
+        if hcnt >= hourly_limit:
+            log_app(
+                user.id,
+                "CRITICAL",
+                f"Почасовой лимит откликов ({hourly_limit}) достигнут — расширение отклонено.",
+                (hcnt, hourly_limit),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Достигнут лимит откликов за час ({hourly_limit}). Подождите или увеличьте лимит в «Поиск».",
+            )
+
     session_id = body.session_id
     if session_id is not None:
         sess = db.get(DbSession, session_id)
@@ -252,8 +330,22 @@ def extension_save_application(
 @router.post("/log")
 def extension_log(
     body: ExtensionLogIn,
+    db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, str]:
     msg = body.message.strip()[:4000]
-    log_app(user.id, body.level, f"[ext] {msg}", None)
+    src = (body.source or "").strip() or None
+    st = (body.step or "").strip() or None
+    log_app(user.id, body.level, f"[ext]{f' [{src}]' if src else ''}{f' {st}' if st else ''} {msg}", None)
+    row = ActivityLog(
+        user_id=user.id,
+        level=body.level,
+        source=src,
+        step=st,
+        message=msg,
+    )
+    db.add(row)
+    db.flush()
+    _prune_user_activity_logs(db, user.id)
+    db.commit()
     return {"ok": "true"}

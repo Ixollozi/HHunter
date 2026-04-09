@@ -17,11 +17,22 @@ def create_app() -> FastAPI:
     app = FastAPI(title="HHunter", version="0.1.0")
 
     _extra = [o.strip() for o in (settings.cors_extra_origins or "").split(",") if o.strip()]
-    # Запросы fetch из content script на hh.ru идут с Origin https://hh.ru — без этого OPTIONS → 400.
-    _hh_fixed = ("https://hh.ru", "https://www.hh.ru")
+    # fetch из content script на сайтах HeadHunter (региональные домены) — иначе CORS OPTIONS → 400.
+    _hh_fixed = (
+        "https://hh.ru",
+        "https://www.hh.ru",
+        "https://hh.uz",
+        "https://www.hh.uz",
+        "https://hh.kz",
+        "https://www.hh.kz",
+    )
     _origins = [settings.frontend_origin, *_hh_fixed, *_extra]
 
-    _re_parts = [r"https://([\w-]+\.)*hh\.ru"]
+    _re_parts = [
+        r"https://([\w-]+\.)*hh\.ru",
+        r"https://([\w-]+\.)*hh\.uz",
+        r"https://([\w-]+\.)*hh\.kz",
+    ]
     if settings.cors_allow_chrome_extension_regex:
         _re_parts.append(r"chrome-extension://[\w-]+")
     _origin_re = "|".join(_re_parts)

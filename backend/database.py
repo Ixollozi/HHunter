@@ -38,4 +38,6 @@ def init_db() -> None:
                 conn.execute(text("ALTER TABLE search_configs ADD COLUMN only_with_salary INTEGER NOT NULL DEFAULT 0"))
             if "search_fields" not in sc_cols:
                 conn.execute(text("ALTER TABLE search_configs ADD COLUMN search_fields TEXT"))
+            if "hourly_limit" not in sc_cols:
+                conn.execute(text("ALTER TABLE search_configs ADD COLUMN hourly_limit INTEGER NOT NULL DEFAULT 35"))
 

@@ -9,6 +9,7 @@ export default function Dashboard() {
   const [apps, setApps] = useState([])
   const [extSettings, setExtSettings] = useState(null)
   const [sentToday, setSentToday] = useState(0)
+  const [activityToday, setActivityToday] = useState(null)
   const refreshInFlight = useRef(false)
   const progress = useMemo(() => {
     const limit = extSettings?.daily_limit ?? 50
@@ -24,6 +25,7 @@ export default function Dashboard() {
       setApps(data.recent_applications || [])
       setExtSettings(data.extension ?? null)
       setSentToday(data.sent_today?.count ?? 0)
+      setActivityToday(data.activity_today ?? null)
     } finally {
       refreshInFlight.current = false
     }
@@ -31,9 +33,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     refresh()
+    const t = setInterval(refresh, 8000)
+    return () => clearInterval(t)
   }, [])
 
   const s = status?.session
+  const act = activityToday
 
   return (
     <div className="space-y-6 relative">
@@ -43,9 +48,30 @@ export default function Dashboard() {
             Главная панель
             <Hint title="Отклики выполняются расширением Chrome на hh.ru. Здесь — прогресс за сегодня (UTC) и последние записи." />
           </h1>
-          <div className="text-slate-400 text-sm mt-1">
-            Последняя серверная сессия (история): отправлено {s?.total_sent || 0} · пропусков {s?.total_skipped || 0}
-            {' '}· ошибок {s?.total_errors || 0}
+          <div className="text-slate-400 text-sm mt-1 space-y-0.5">
+            <div>
+              Сегодня (UTC, таблица откликов): отправлено {act?.sent ?? sentToday} · пропусков {act?.skipped ?? 0} ·
+              ошибок {act?.errors ?? 0}
+            </div>
+            {s?.id ? (
+              <div className="text-slate-500 text-xs">
+                Сессия серверного конвейера #{s.id} (если используете): отправлено {s.total_sent} · пропусков{' '}
+                {s.total_skipped} · ошибок {s.total_errors} — расширение чаще пишет отклики без{' '}
+                <code className="text-slate-400">session_id</code>, поэтому эта строка может оставаться нулевой. Шаги:{' '}
+                <Link className="text-indigo-400 hover:underline" to="/logs">
+                  Логи
+                </Link>
+                .
+              </div>
+            ) : (
+              <div className="text-slate-500 text-xs">
+                Сессии API-конвейера нет — учёт идёт по записям «Отклики». Подробные шаги —{' '}
+                <Link className="text-indigo-400 hover:underline" to="/logs">
+                  Логи
+                </Link>
+                .
+              </div>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">

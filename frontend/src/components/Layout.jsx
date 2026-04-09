@@ -40,12 +40,21 @@ export function Layout() {
           </Link>
           {authed ? (
             <>
-              <nav className="ml-4 flex flex-wrap gap-2">
+              <nav
+                className="ml-2 sm:ml-4 flex max-w-[calc(100vw-8rem)] min-w-0 flex-1 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden py-0.5 sm:max-w-none sm:flex-wrap sm:overflow-visible"
+                style={{ WebkitOverflowScrolling: 'touch' }}
+              >
                 <NavItem
                   to="/"
                   title="Обзор: расширение для откликов, прогресс за день, последние записи, проверка сервиса."
                 >
                   Главная
+                </NavItem>
+                <NavItem
+                  to="/logs"
+                  title="Пошаговый журнал расширения Chrome (автопоиск и полуавтомат) в реальном времени."
+                >
+                  Логи
                 </NavItem>
                 <NavItem
                   to="/extension"

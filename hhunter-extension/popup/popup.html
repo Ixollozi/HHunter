@@ -22,6 +22,19 @@
         <label></label>
         <button type="button" id="btnPullToken" class="btn-secondary">Токен с сайта</button>
       </div>
+      <div class="row">
+        <label>Сайт HeadHunter</label>
+        <select id="hhOrigin" title="Полный цикл открывает поиск и вакансии на этом домене; активная вкладка — тот же домен.">
+          <option value="https://hh.ru">Россия — hh.ru</option>
+          <option value="https://tashkent.hh.uz">Ташкент — tashkent.hh.uz</option>
+          <option value="https://hh.uz">Узбекистан — hh.uz</option>
+          <option value="https://hh.kz">Казахстан — hh.kz</option>
+        </select>
+      </div>
+      <div class="row">
+        <label></label>
+        <label class="check"><input type="checkbox" id="fullAuto" /> Полный цикл: поиск → вакансии → отклик</label>
+      </div>
       <div class="row buttons">
         <button id="btnSave">Сохранить</button>
         <button id="btnToggle">Запустить</button>

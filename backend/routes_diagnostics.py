@@ -103,7 +103,7 @@ def run_diagnostics_stream(
                 "ok": search_ok,
                 "label": "Параметры поиска (лимиты для расширения)",
                 "detail": (
-                    f"Лимит {cfg.daily_limit}/день, пауза {cfg.delay_min}–{cfg.delay_max} с"
+                    f"Лимит {cfg.daily_limit}/день, {getattr(cfg, 'hourly_limit', 35)}/час, пауза {cfg.delay_min}–{cfg.delay_max} с"
                     if cfg
                     else "Сохраните раздел «Поиск»"
                 ),
@@ -322,7 +322,7 @@ def run_diagnostics(
             "ok": search_ok,
             "label": "Параметры поиска (лимиты для расширения)",
             "detail": (
-                f"Лимит {cfg.daily_limit}/день, пауза {cfg.delay_min}–{cfg.delay_max} с"
+                f"Лимит {cfg.daily_limit}/день, {getattr(cfg, 'hourly_limit', 35)}/час, пауза {cfg.delay_min}–{cfg.delay_max} с"
                 if cfg
                 else "Сохраните раздел «Поиск»"
             ),

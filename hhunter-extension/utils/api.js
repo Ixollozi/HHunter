@@ -1,11 +1,14 @@
-﻿/* Service worker: no import/export — Chrome importScripts loads classic scripts only. */
+/* Service worker: no import/export — Chrome importScripts loads classic scripts only. */
 var DEFAULT_API_BASE = 'http://localhost:8000'
 
 async function apiFetch(apiBase, token, path, init = {}) {
   const base = String(apiBase || '').replace(/\/$/, '')
   const url = `${base}${path}`
   const headers = Object.assign({}, init.headers || {})
-  headers['Content-Type'] = headers['Content-Type'] || 'application/json'
+  const method = String(init.method || 'GET').toUpperCase()
+  if (method !== 'GET' && method !== 'HEAD' && init.body != null && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json'
+  }
   if (token) headers.Authorization = `Bearer ${token}`
   const res = await fetch(url, { ...init, headers })
   const text = await res.text()

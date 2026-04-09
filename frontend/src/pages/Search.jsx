@@ -78,8 +78,9 @@ function defaultForm() {
     only_with_salary: false,
     order_by: 'publication_time',
     delay_min: 2,
-    delay_max: 6,
+    delay_max: 4,
     daily_limit: 200,
+    hourly_limit: 35,
   }
 }
 
@@ -97,8 +98,9 @@ function normalizeLoadedSearch(s) {
   base.order_by = base.order_by || 'publication_time'
   base.period = base.period ?? 7
   base.delay_min = base.delay_min ?? 2
-  base.delay_max = base.delay_max ?? 6
+  base.delay_max = base.delay_max ?? 4
   base.daily_limit = base.daily_limit ?? 200
+  base.hourly_limit = base.hourly_limit ?? 35
   return base
 }
 
@@ -125,6 +127,7 @@ function buildSearchPayload(f) {
     delay_min: f.delay_min,
     delay_max: f.delay_max,
     daily_limit: f.daily_limit,
+    hourly_limit: f.hourly_limit,
   }
 }
 
@@ -527,7 +530,7 @@ export default function Search() {
 
         <div className="border-t border-slate-800 pt-4 space-y-3">
           <p className="text-sm text-slate-500">Настройки отклика</p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <label className="block space-y-1">
               <span className="text-sm text-slate-400">Задержка мин, сек</span>
               <input
@@ -549,17 +552,31 @@ export default function Search() {
               />
             </label>
             <label className="block space-y-1">
-              <span className="text-sm text-slate-400">Лимит откликов в день</span>
+              <span className="text-sm text-slate-400">Лимит откликов в день (UTC)</span>
               <input
                 className={field}
                 type="number"
                 min={1}
-                max={200}
+                max={500}
                 value={form.daily_limit}
                 onChange={(e) => setForm((p) => ({ ...p, daily_limit: Number(e.target.value) }))}
               />
             </label>
+            <label className="block space-y-1">
+              <span className="text-sm text-slate-400">Лимит за час (UTC)</span>
+              <input
+                className={field}
+                type="number"
+                min={10}
+                max={80}
+                value={form.hourly_limit}
+                onChange={(e) => setForm((p) => ({ ...p, hourly_limit: Number(e.target.value) }))}
+              />
+            </label>
           </div>
+          <p className="text-xs text-slate-500">
+            Пауза между вакансиями в полном авто — случайная от мин до макс (рекомендуется 2–4 с). Почасовой лимит снижает риск блокировок на hh.
+          </p>
         </div>
 
         <button

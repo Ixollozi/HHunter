@@ -40,4 +40,5 @@ def search_config_dict_from_row(cfg: Any) -> dict[str, Any]:
         "delay_min": cfg.delay_min,
         "delay_max": cfg.delay_max,
         "daily_limit": cfg.daily_limit,
+        "hourly_limit": int(getattr(cfg, "hourly_limit", 35) or 35),
     }

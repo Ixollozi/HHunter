@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 
 from typing import Any
@@ -35,24 +36,73 @@ FORBIDDEN_PHRASES = """
 """
 
 
-def vacancy_dict_for_extension(title: str, description: str, company_name: str) -> dict[str, Any]:
-    """Минимальный dict вакансии для build_prompt из данных расширения (DOM)."""
+def vacancy_dict_for_extension(
+    title: str,
+    description: str,
+    company_name: str,
+    *,
+    requirements: str = "",
+    key_skills_text: str = "",
+    salary_info: str = "",
+) -> dict[str, Any]:
+    """dict вакансии для build_prompt из данных расширения (DOM hh.ru / hh.uz …)."""
+    skills_list: list[str] = []
+    if (key_skills_text or "").strip():
+        skills_list = [x.strip() for x in re.split(r"[,;•\n|]", key_skills_text) if x.strip()][:48]
+    parts: list[str] = [(description or "").strip()]
+    if (requirements or "").strip():
+        parts.append("Требования и ожидания (фрагмент с сайта):\n" + requirements.strip()[:8000])
+    if (salary_info or "").strip():
+        parts.append("Зарплата (как на сайте): " + salary_info.strip()[:400])
+    full_desc = "\n\n".join(p for p in parts if p)[:120_000]
     return {
         "name": title,
-        "description": description,
+        "description": full_desc,
         "employer": {"name": company_name or ""},
-        "key_skills": [],
+        "key_skills": [{"name": n} for n in skills_list],
     }
 
 
-def build_prompt(vacancy: dict[str, Any], resume_text: str) -> str:
-    description = (vacancy.get("description") or "")[:2800]
+def letter_style_from_seed(seed: str) -> tuple[float, str]:
+    """Температура Groq и текстовые вариации, чтобы письма отличались между вакансиями."""
+    h = hashlib.sha256(seed.encode("utf-8")).digest()
+    t = 0.30 + (h[0] / 255.0) * 0.26
+    n_lo = 5 + (h[1] % 2)
+    n_hi = n_lo + 1 + (h[2] % 2)
+    openings = [
+        "Без приветствия «Здравствуйте» и без «уважаемые».",
+        "Старт — конкретный факт из резюме (срок, роль или метрика), затем связь с формулировкой из описания.",
+        "Первое предложение — про задачу из описания; следующее — как ваш опыт это закрывает.",
+    ]
+    closings = [
+        "Последнее предложение — коротко про готовность к короткому созвону или ответу в переписке.",
+        "Финал — одна нейтральная фраза; не вставляй название компании в последнее предложение.",
+        "Заверши ненавязчиво: если удобно — готов уточнить детали в ответном сообщении.",
+    ]
+    mid = [
+        "В середине явно назови не больше двух технологий.",
+        "Технологии вплетай в факты, не списком через запятую в одном предложении.",
+    ]
+    block = (
+        f"{openings[h[3] % len(openings)]}\n"
+        f"{mid[h[5] % len(mid)]}\n"
+        f"Длина: {n_lo}–{n_hi} законченных предложений (выбери число в этом диапазоне).\n"
+        f"{closings[h[4] % len(closings)]}"
+    )
+    return round(t, 3), block
+
+
+def build_prompt(vacancy: dict[str, Any], resume_text: str, *, style_block: str = "") -> str:
+    description = (vacancy.get("description") or "")[:12000]
     employer = vacancy.get("employer") or {}
     key_skills = vacancy.get("key_skills") or []
     if key_skills and isinstance(key_skills[0], dict):
         key_skills = [x.get("name") for x in key_skills if isinstance(x, dict) and x.get("name")]
     skills_line = ", ".join(str(x) for x in key_skills if x) or "—"
     resume_block = trim_resume_for_prompt(polish_resume_text_for_llm(resume_text or ""))
+    style_extra = ""
+    if (style_block or "").strip():
+        style_extra = f"\nСТИЛЬ И ВАРИАЦИЯ (для этой вакансии — соблюдай):\n{style_block.strip()}\n"
     return f"""
 Ты — человек, пишущий сопроводительное письмо на русском языке.
 Не ИИ, не ассистент. Живой специалист.
@@ -67,12 +117,12 @@ def build_prompt(vacancy: dict[str, Any], resume_text: str) -> str:
 Нужны для письма: желаемая роль, опыт (роли, компании, сроки), стек и инструменты, 1–2 сильных проекта/достижения, образование при необходимости. Опирайся только на этот блок, не выдумывай опыт.
 
 {resume_block}
-
+{style_extra}
 ЗАДАЧА:
 Напиши сопроводительное письмо так, как коротко написал бы человек рекрутеру в переписке — без «продающего» HR-тона.
 
 ПРАВИЛА:
-1. Длина: 4–6 коротких предложений; каждое закончено точкой (не обрывай слово в конце)
+1. Длина и ритм: если задан блок «СТИЛЬ И ВАРИАЦИЯ» — следуй ему; иначе 4–6 коротких предложений; каждое закончено точкой (не обрывай слово в конце)
 2. Первое предложение — живой факт из резюме (срок, роль, что делал), связь с задачей из описания вакансии; БЕЗ «ищу возможности», БЕЗ «развитие в разработке» как старт
 3. Название работодателя из поля «Компания» НЕ обязательно упоминать. Если без имени звучит естественно — не вставляй бренд насильно. Допустимо «у вас», «в описании», «по задачам из вакансии». Не заканчивай письмо шаблоном «в команду [название компании]» или «в [название]» — это выдаёт бота
 4. Не перечисляй весь стек одной строкой через запятую. В одном предложении — не больше 2–3 технологий; остальное вплети по смыслу или опусти
@@ -101,8 +151,11 @@ def generate_cover_letter(
     model: str | None = None,
     attempt: int = 0,
     user_id: int | None = None,
+    style_block: str = "",
+    temperature: float | None = None,
 ) -> str:
-    prompt = build_prompt(vacancy, resume_text)
+    prompt = build_prompt(vacancy, resume_text, style_block=style_block)
+    temp = 0.2 if temperature is None else max(0.08, min(0.72, float(temperature)))
     res = groq_chat_completion(
         api_key=api_key,
         model=model or settings.groq_default_model,
@@ -119,8 +172,8 @@ def generate_cover_letter(
             "- Без шаблонных HR-фраз\n"
         ),
         user_prompt=prompt,
-        temperature=0.2,
-        max_tokens=260,
+        temperature=temp,
+        max_tokens=300,
     )
     raw = res.text
     meta = {
@@ -247,6 +300,11 @@ def get_quality_letter(
         },
     )
 
+    desc_snip = str(vacancy.get("description") or "")[:520]
+    emp = vacancy.get("employer") if isinstance(vacancy.get("employer"), dict) else {}
+    style_seed = f"{vacancy.get('name') or ''}|{emp.get('name') or ''}|{desc_snip}"
+    temperature, style_block = letter_style_from_seed(style_seed)
+
     last = ""
     last_raw = ""
     last_reason = ""
@@ -258,6 +316,8 @@ def get_quality_letter(
             model=model,
             attempt=attempt,
             user_id=user_id,
+            style_block=style_block,
+            temperature=temperature,
         )
         last_raw = raw
         cleaned = clean_letter(raw)

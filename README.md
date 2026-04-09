@@ -22,6 +22,12 @@ copy backend\.env.example backend\.env
 python start.py
 ```
 
+По умолчанию это **лёгкий режим**: API + `vite preview` со **свежей** сборкой — перед запуском выполняется `npm run build`, если менялись `frontend/src` (или конфиги) и они новее `frontend/dist`. Раньше сборка делалась только при первом появлении `dist/`, из‑за чего UI «застывал».
+
+- Активная вёрстка с горячей перезагрузкой: `python start.py --dev` (Vite dev + при необходимости `--reload` у uvicorn).
+- Всегда пересобрать фронт перед preview: `python start.py --force-frontend-build`.
+- Пропустить проверку и сборку (быстрый старт со старым `dist`): `python start.py --skip-frontend-build`.
+
 ### Отдельно: только API
 
 Из корня (с активированным `.venv`):

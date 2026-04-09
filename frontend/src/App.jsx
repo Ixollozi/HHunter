@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Extension from './pages/Extension'
+import Logs from './pages/Logs'
 import Reports from './pages/Reports'
 import Results from './pages/Results'
 import Search from './pages/Search'
@@ -13,11 +14,12 @@ import Settings from './pages/Settings'
 function App() {
   return (
     <Routes>
-      <Route element={<Layout />}>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+      {/* Явный path="/" — надёжнее для React Router 7, чем layout без path */}
+      <Route path="/" element={<Layout />}>
+        <Route path="login" element={<Login />} />
+        <Route path="register" element={<Register />} />
         <Route
-          path="/"
+          index
           element={
             <RequireAuth>
               <Dashboard />
@@ -25,7 +27,7 @@ function App() {
           }
         />
         <Route
-          path="/settings"
+          path="settings"
           element={
             <RequireAuth>
               <Settings />
@@ -33,7 +35,7 @@ function App() {
           }
         />
         <Route
-          path="/search"
+          path="search"
           element={
             <RequireAuth>
               <Search />
@@ -41,7 +43,7 @@ function App() {
           }
         />
         <Route
-          path="/results"
+          path="results"
           element={
             <RequireAuth>
               <Results />
@@ -49,7 +51,7 @@ function App() {
           }
         />
         <Route
-          path="/reports"
+          path="reports"
           element={
             <RequireAuth>
               <Reports />
@@ -57,7 +59,15 @@ function App() {
           }
         />
         <Route
-          path="/extension"
+          path="logs"
+          element={
+            <RequireAuth>
+              <Logs />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="extension"
           element={
             <RequireAuth>
               <Extension />
