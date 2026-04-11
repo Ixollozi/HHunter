@@ -50,8 +50,9 @@ export default function Dashboard() {
           </h1>
           <div className="text-slate-400 text-sm mt-1 space-y-0.5">
             <div>
-              Сегодня (UTC, таблица откликов): отправлено {act?.sent ?? sentToday} · пропусков {act?.skipped ?? 0} ·
-              ошибок {act?.errors ?? 0}
+              Сегодня (UTC, таблица откликов): отправлено{' '}
+              <span className="text-green-400 font-medium tabular-nums">{act?.sent ?? sentToday}</span> · пропусков{' '}
+              {act?.skipped ?? 0} · ошибок {act?.errors ?? 0}
             </div>
             {s?.id ? (
               <div className="text-slate-500 text-xs">
@@ -117,7 +118,7 @@ export default function Dashboard() {
         </div>
         <div className="mt-2 h-2 rounded-full bg-slate-800 overflow-hidden">
           <div
-            className="h-2 bg-indigo-500 transition-[width] duration-300"
+            className="h-2 bg-green-500 transition-[width] duration-300"
             style={{ width: `${Math.min(100, (progress.sent / (progress.limit || 1)) * 100)}%` }}
           />
         </div>
@@ -150,7 +151,7 @@ export default function Dashboard() {
                 <div
                   className={`shrink-0 px-2 py-1 rounded-lg text-xs transition-transform hover:scale-105 ${
                     a.status === 'sent'
-                      ? 'bg-emerald-500/20 text-emerald-300'
+                      ? 'bg-green-600/30 text-green-300 border border-green-500/40'
                       : a.status === 'error'
                         ? 'bg-red-500/20 text-red-300'
                         : 'bg-slate-700/40 text-slate-300'

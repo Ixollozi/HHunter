@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 
 from typing import Any
 
@@ -33,6 +34,10 @@ FORBIDDEN_PHRASES = """
 - Канцелярит: «эффективно включиться в процесс», «что позволяет эффективно», «в рамках требований позиции»
 - Любые шаблонные вводные фразы и обрывы на полуслове (все предложения должны быть законченными)
 - Слово "синергия" и подобный корпоратив
+- Начинать письмо с «N лет опыта», «N лет в разработке», «N месяцев в backend» — это шаблон, не показывающий релевантность
+- «что позволяет эффективно включиться в существующий процесс разработки» и любые вариации
+- «соответствует требованиям позиции в [компания]»
+- «готов обсудить детали в удобное для команды время»
 """
 
 
@@ -123,7 +128,7 @@ def build_prompt(vacancy: dict[str, Any], resume_text: str, *, style_block: str 
 
 ПРАВИЛА:
 1. Длина и ритм: если задан блок «СТИЛЬ И ВАРИАЦИЯ» — следуй ему; иначе 4–6 коротких предложений; каждое закончено точкой (не обрывай слово в конце)
-2. Первое предложение — живой факт из резюме (срок, роль, что делал), связь с задачей из описания вакансии; БЕЗ «ищу возможности», БЕЗ «развитие в разработке» как старт
+2. Первое предложение — НЕ начинай с «N лет/месяцев опыта» или «N лет в разработке» — это шаблон. Начни с конкретного действия или результата: что делал, что построил, что решил — и сразу свяжи с задачей из описания вакансии
 3. Название работодателя из поля «Компания» НЕ обязательно упоминать. Если без имени звучит естественно — не вставляй бренд насильно. Допустимо «у вас», «в описании», «по задачам из вакансии». Не заканчивай письмо шаблоном «в команду [название компании]» или «в [название]» — это выдаёт бота
 4. Не перечисляй весь стек одной строкой через запятую. В одном предложении — не больше 2–3 технологий; остальное вплети по смыслу или опусти
 5. Свяжи 1–2 навыка с тем, что явно в описании или ключевых навыках вакансии
@@ -134,12 +139,16 @@ def build_prompt(vacancy: dict[str, Any], resume_text: str, *, style_block: str 
 
 {FORBIDDEN_PHRASES}
 
-ПРИМЕР ХОРОШЕГО ПИСЬМА (факты, без перечня технологий и без имени работодателя в конце):
-"Пять лет в backend на Python, последние два года тянул платежи и лимиты в fintech.
-В описании у вас упор на очереди — у нас как раз поднимали пропускную способность до порядка 50k операций в секунду, стек близкий к тому, что у вас в тексте.
-Если интересно, расскажу подробнее на коротком созвоне."
+ПРИМЕР ХОРОШЕГО ПИСЬМА (конкретное действие в начале, связь с вакансией, без перечня технологий):
+"Строил платёжный сервис с очередями — поднимали пропускную способность до 50k операций в секунду.
+В описании у вас похожая задача по нагрузке, стек близкий к тому что у нас был.
+Если интересно — расскажу подробнее на коротком созвоне."
 
-Напиши только текст письма, без кавычек и пояснений.
+ПРИМЕР ПЛОХОГО НАЧАЛА (так писать нельзя):
+"Два года опыта в backend-разработке на Python..." — слишком шаблонно, не показывает что кандидат подходит именно для этой вакансии.
+"Пять лет в backend на Python..." — то же самое, начало с количества лет не цепляет.
+
+Напиши только текст письма, без кавычек и пояснений. Без размышлений, тегов и преамбулы — сразу текст письма.
 """.strip()
 
 
@@ -156,25 +165,45 @@ def generate_cover_letter(
 ) -> str:
     prompt = build_prompt(vacancy, resume_text, style_block=style_block)
     temp = 0.2 if temperature is None else max(0.08, min(0.72, float(temperature)))
-    res = groq_chat_completion(
-        api_key=api_key,
-        model=model or settings.groq_default_model,
-        system_prompt=(
-            "Ты помогаешь соискателю написать сопроводительное письмо на русском языке под конкретную вакансию.\n"
-            "Правила:\n"
-            "- Только русский язык\n"
-            "- Только текст письма, без темы и заголовков\n"
-            "- Никогда не показывай рассуждения, план, анализ или скрытые мысли. Не используй теги <redacted_thinking>.\n"
-            "- Не начинать с «Ищу возможности…» / «Хочу развиваться…» и подобных вводных\n"
-            "- Опирайся на описание вакансии, но не копируй формулировки «как от робота»\n"
-            "- Не обязательно называть компанию-работодателя по имени; не вставляй бренд в последнее предложение насильно\n"
-            "- Короткие предложения, разговорный деловой тон; не перечисляй весь стек через запятую в одном предложении\n"
-            "- Без шаблонных HR-фраз\n"
-        ),
-        user_prompt=prompt,
-        temperature=temp,
-        max_tokens=300,
-    )
+    last_exc = None
+    m = (model or settings.groq_default_model).lower()
+    # Groq Qwen3: иначе в content попадают теги <think> / </redacted_thinking> (reasoning в сыром виде).
+    groq_extra: dict[str, Any] = {}
+    if "qwen3" in m:
+        groq_extra["reasoning_effort"] = "none"
+        groq_extra["reasoning_format"] = "hidden"
+
+    for _attempt in range(3):
+        try:
+            res = groq_chat_completion(
+                api_key=api_key,
+                model=model or settings.groq_default_model,
+                extra_body=groq_extra or None,
+                system_prompt=(
+                    "Ты помогаешь соискателю написать сопроводительное письмо на русском языке под конкретную вакансию.\n"
+                    "Правила:\n"
+                    "- Только русский язык\n"
+                    "- Только текст письма, без темы и заголовков\n"
+                    "- НИКОГДА не используй теги <think>, </think>, <thinking>, </thinking> и любые блоки размышлений. Выводи ТОЛЬКО финальный текст письма.\n"
+                    "- Без преамбулы: не пиши «план», «шаги», «сначала», «нужно» — сразу текст письма работодателю, с первого значимого предложения.\n"
+                    "- Никогда не показывай рассуждения, план, анализ или скрытые мысли.\n"
+                    "- Не начинать с «Ищу возможности…» / «Хочу развиваться…» и подобных вводных\n"
+                    "- Опирайся на описание вакансии, но не копируй формулировки «как от робота»\n"
+                    "- Не обязательно называть компанию-работодателя по имени; не вставляй бренд в последнее предложение насильно\n"
+                    "- Короткие предложения, разговорный деловой тон; не перечисляй весь стек через запятую в одном предложении\n"
+                    "- Без шаблонных HR-фраз\n"
+                ),
+                user_prompt=prompt,
+                temperature=temp,
+                max_tokens=300,
+            )
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            time.sleep(2 * (_attempt + 1))
+    else:
+        raise last_exc  # type: ignore[misc]
+
     raw = res.text
     meta = {
         "prompt_tokens": res.prompt_tokens,
@@ -198,13 +227,67 @@ def generate_cover_letter(
             **meta,
         },
     )
-    return raw
+    return clean_letter(raw)
 
 
 def clean_letter(text: str) -> str:
-    cleaned = re.sub(r"<redacted_thinking>[\s\S]*?</redacted_thinking>", "", text, flags=re.IGNORECASE).strip()
-    # Иногда модель вставляет "think" без тегов — вырезаем такие блоки в начале.
-    cleaned = re.sub(r"^\s*\(?\s*think\s*\)?\s*[\s\S]{0,800}?\n+", "", cleaned, flags=re.IGNORECASE).strip()
+    """Убирает think/redacted-блоки Qwen3, в т.ч. сиротский </redacted_thinking> перед текстом письма."""
+    cleaned = str(text or "").replace("\ufeff", "").strip()
+    # Невидимые символы между «буквами» тега ломают простые regex
+    cleaned = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff\u2060-\u2064]", "", cleaned)
+    _tag = (
+        r"redacted_thinking|redacted_reasoning|thinking|think"
+        r"|thought|reasoning"
+    )
+    _pair = re.compile(
+        rf"<\s*(?:{_tag})\s*>[\s\S]*?</\s*(?:{_tag})\s*>",
+        re.IGNORECASE,
+    )
+    _orphan_close = re.compile(rf"</\s*(?:{_tag})\s*>\s*", re.IGNORECASE)
+    _orphan_open = re.compile(rf"<\s*(?:{_tag})\s*>", re.IGNORECASE)
+    _empty_pair = re.compile(
+        rf"<\s*(?:{_tag})\s*>\s*</\s*(?:{_tag})\s*>",
+        re.IGNORECASE,
+    )
+    for _ in range(16):
+        prev = cleaned
+        cleaned = _pair.sub("", cleaned).strip()
+        cleaned = _empty_pair.sub("", cleaned).strip()
+        cleaned = re.sub(r"<think\s*/?>\s*", "", cleaned, flags=re.IGNORECASE).strip()
+        # Сиротские теги (часто модель оставляет только закрывающий перед письмом)
+        cleaned = _orphan_close.sub("", cleaned).strip()
+        cleaned = _orphan_open.sub("", cleaned).strip()
+        cleaned = re.sub(r"^\s*\(?\s*think\s*\)?\s*[\s\S]{0,800}?\n+", "", cleaned, flags=re.IGNORECASE).strip()
+        _bq = chr(96)
+        for _wrapped in (
+            _bq + "</redacted_thinking>" + _bq,
+            _bq + "</thinking>" + _bq,
+            _bq + "<redacted_thinking>" + _bq,
+            _bq + "<thinking>" + _bq,
+        ):
+            cleaned = cleaned.replace(_wrapped, "").strip()
+        if cleaned == prev:
+            break
+    # Строки, состоящие только из служебных тегов
+    _bq_esc = re.escape(chr(96))
+    _tag_only = re.compile(
+        rf"</?\s*(?:{_tag})\s*>|<think\s*/?>|"
+        + _bq_esc
+        + r"</?\s*(?:redacted_thinking|redacted_reasoning|thinking)\s*>"
+        + _bq_esc,
+        re.IGNORECASE,
+    )
+    kept: list[str] = []
+    for line in cleaned.splitlines():
+        s = line.strip()
+        if not s:
+            kept.append(line)
+            continue
+        if _tag_only.fullmatch(s):
+            continue
+        kept.append(line)
+    cleaned = "\n".join(kept).strip()
+    cleaned = cleaned.lstrip()
     bad_starts = [
         r"^Уважаем\w+.*?,?\s*",
         r"^Здравствуйте.*?[,!]\s*",
@@ -219,7 +302,6 @@ def clean_letter(text: str) -> str:
     for pattern in bad_starts:
         cleaned = re.sub(pattern, "", cleaned, count=1, flags=re.IGNORECASE | re.DOTALL)
     cleaned = cleaned.strip()
-    # Убрать «шапку» в одну строку: только название с «!», без запятой/точки в строке
     parts = cleaned.split("\n", 1)
     if len(parts) == 2:
         fl = parts[0].strip()
@@ -255,8 +337,16 @@ def validate_letter(text: str) -> tuple[bool, str]:
     ]
 
     lower = text.lower()
-    if "<think" in lower or "```" in lower:
-        return False, "Лишний блок (think/code) — письмо должно быть только текстом"
+    if re.search(
+        r"<redacted_thinking|</think>|<redacted_reasoning|</redacted_reasoning>|"
+        r"<thinking|</thinking>|<reasoning|</reasoning>|<thought|</thought>|"
+        r"<think[\s/>]",
+        text,
+        re.IGNORECASE,
+    ):
+        return False, "Остались служебные теги размышлений — письмо должно быть только текстом"
+    if "```" in lower:
+        return False, "Лишний блок (code) — письмо должно быть только текстом"
     for phrase in red_flags:
         if phrase in lower:
             return False, f"Найдена шаблонная фраза: '{phrase}'"
@@ -285,7 +375,7 @@ def get_quality_letter(
     vacancy: dict[str, Any],
     resume_text: str,
     api_key: str,
-    max_retries: int = 4,
+    max_retries: int = 1,
     user_id: int | None = None,
     model: str | None = None,
 ) -> str:
@@ -294,7 +384,7 @@ def get_quality_letter(
         {
             "stage": "quality_loop_start",
             "max_retries": max_retries,
-            "model": settings.gemini_model,
+            "model": model or settings.groq_default_model,
             "vacancy_id": str(vacancy.get("id") or "")[:32] or None,
             "vacancy_title": (vacancy.get("name") or "")[:200] or None,
         },
@@ -320,11 +410,12 @@ def get_quality_letter(
             temperature=temperature,
         )
         last_raw = raw
-        cleaned = clean_letter(raw)
+        # generate_cover_letter уже возвращает clean_letter(ответ модели)
+        cleaned = raw
         last = cleaned
         ok, reason = validate_letter(cleaned)
         last_reason = reason
-        changed_by_clean = raw.strip() != cleaned.strip()
+        changed_by_clean = False
 
         log_letter_generation(
             user_id,

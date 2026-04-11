@@ -194,6 +194,25 @@
     )
   }
 
+  async function ensureLetterTextareaVisible() {
+    // Если textarea уже видна — ничего не делаем
+    let ta = findLetterTextarea()
+    if (ta && visibleElement(ta)) return ta
+
+    // Ищем toggle-кнопку «Приложить сопроводительное письмо»
+    const toggle = document.querySelector('[data-qa="vacancy-response-letter-toggle"]')
+    if (toggle && visibleElement(toggle)) {
+      toggle.click()
+      await sleep(400)
+      ta = await waitUntil(() => {
+        const t = findLetterTextarea()
+        return t && visibleElement(t) ? t : null
+      }, 5000, 150)
+      return ta
+    }
+    return null
+  }
+
   // ─── Country/region mismatch dialog ──────────────────────────────────────
 
   function textSuggestsCountryOrRegionMismatch(text) {
@@ -214,6 +233,14 @@
 
   function tryDismissCountryMismatchModal() {
     const roots = []
+
+    // Быстрый путь: кнопки с явными data-qa от HH
+    const confirmBtn = document.querySelector('[data-qa="relocation-warning-confirm"]')
+    if (confirmBtn && visibleElement(confirmBtn) && isSubmitLikeClickable(confirmBtn)) {
+      confirmBtn.click()
+      return true
+    }
+
     try {
       document.querySelectorAll('[role="dialog"], [role="alertdialog"]').forEach((el) => {
         if (visibleElement(el)) roots.push(el)
@@ -233,7 +260,7 @@
       for (const b of buttons) {
         if (!visibleElement(b) || !isSubmitLikeClickable(b)) continue
         const label = (b.innerText || b.textContent || '').replace(/\s+/g, ' ').trim()
-        if (/вс[её]\s*равно/i.test(label) && /отклик|продолж|подать|остав/i.test(label)) {
+        if (/вс[её е]\s*равно/i.test(label) && /отклик|продолж|подать|остав/i.test(label)) {
           b.click()
           return true
         }
@@ -377,63 +404,34 @@
   // ─── Chat opener (variant 3: country warning) ─────────────────────────────
 
   /**
-   * Ищем элемент-ссылку или кнопку, открывающую чат с работодателем.
-   * Возвращаем объект { el, hasHref } — hasHref означает что это настоящая <a> с href,
-   * которую можно принудительно открыть в новой вкладке.
+   * Ищем ссылку или кнопку чата только внутри диалога «другая страна».
+   * Возвращаем { el, hasHref } — hasHref для настоящей <a> с http(s) href.
    */
   function findEmployerChatOpenerEx() {
+    // Ищем ТОЛЬКО внутри диалога предупреждения о стране
     const dlg = countryMismatchDialogRoot()
-    const candidates = []
+    if (!dlg) return null
 
-    // Сначала ищем внутри диалога предупреждения о стране
-    if (dlg) {
-      dlg.querySelectorAll('a, button, [role="button"]').forEach((el) => {
-        if (visibleElement(el)) candidates.push({ el, inDlg: true })
-      })
+    // Ищем ссылку на конкретный чат /chat/{id} внутри диалога
+    for (const a of dlg.querySelectorAll('a[href]')) {
+      if (!visibleElement(a)) continue
+      const href = a.href || ''
+      // Только прямая ссылка на чат с конкретным ID, не список переговоров
+      if (/\/chat\/\d+/i.test(href)) {
+        return { el: a, hasHref: true }
+      }
     }
 
-    // Затем глобально по data-qa и href паттернам
-    const selExtra = [
-      '[data-qa*="chat"]',
-      '[data-qa*="messenger"]',
-      'a[href*="/applicant/negotiations"]',
-      'a[href*="/chat"]',
-    ]
-    selExtra.forEach((sel) => {
-      try {
-        document.querySelectorAll(sel).forEach((el) => {
-          if (!visibleElement(el)) return
-          const rm = responseModal()
-          if (rm && rm.contains(el) && !/chat|messenger|чат/i.test(el.getAttribute('data-qa') || '')) return
-          candidates.push({ el, inDlg: false })
-        })
-      } catch { /* */ }
-    })
-
-    // Кнопки/ссылки по тексту
-    try {
-      document.querySelectorAll('a, button, [role="button"]').forEach((el) => {
-        if (!visibleElement(el) || !isSubmitLikeClickable(el)) return
-        const t = labelOf(el)
-        if (t.length > 80) return
-        if (/чат\s+с\s+работод|написать\s+в\s+чат|написать\s+работод|открыть\s+чат|^чат$/i.test(t)) {
-          candidates.push({ el, inDlg: false })
-        }
-      })
-    } catch { /* */ }
-
-    for (const { el } of candidates) {
+    // Ищем кнопку чата по тексту внутри диалога
+    for (const el of dlg.querySelectorAll('button, [role="button"], a')) {
       if (!visibleElement(el) || !isSubmitLikeClickable(el)) continue
       const t = labelOf(el)
-      const href = String(el.getAttribute('href') || '')
-      const isChat =
-        /чат|написать\s+в\s+чат|написать\s+работод|написать\s+сообщени|сообщени|связь\s+с\s+работод|employer\s+chat|write\s+(a\s+)?message/i.test(t) ||
-        (/\/chat|negotiations/i.test(href) && !/vacancy-response|отклик/i.test(href))
-      if (!isChat) continue
-
-      const isAnchor = el instanceof HTMLAnchorElement && /^https?:/i.test(el.href || '')
-      return { el, hasHref: isAnchor }
+      if (/написать\s+в\s+чат|чат\s+с\s+работод|открыть\s+чат/i.test(t)) {
+        const isAnchor = el instanceof HTMLAnchorElement && /^https?:/i.test(el.href || '')
+        return { el, hasHref: isAnchor }
+      }
     }
+
     return null
   }
 
@@ -456,14 +454,13 @@
     const chatEl = findChatComposerFieldGlobal()
     if (chatEl && visibleElement(chatEl)) return 'chat'
 
-    // Вариант 4: модалка открыта, но письма нет — только кнопка «Откликнуться»
+    // Вариант 4: ТОЛЬКО если модалка уже открыта, но письма нет
     const modal = responseModal()
     if (modal && visibleElement(modal)) {
       const sub = findSubmitButton()
       if (sub && visibleElement(sub) && isSubmitLikeClickable(sub)) return 'simple'
     }
-    // Не считаем «simple» верхнюю ссылку «Откликнуться» на странице — это открытие формы (вариант 1),
-    // иначе пропускается клик по openBtn и письмо никуда не вставляется.
+    // findDirectApplyButton() здесь НЕ вызываем — это кнопка открытия формы, не отклика без письма
 
     return 'none'
   }
@@ -564,7 +561,7 @@
 
   function detectApplySuccess() {
     const t = (document.body && document.body.innerText) || ''
-    if (/отклик\s+отправлен|отклик\s+успешно|ваш\s+отклик|мы\s+свяжемся|спасибо\s+за\s+отклик/i.test(t)) return true
+    if (/отклик\s+отправлен|отклик\s+успешно|ваш\s+отклик|мы\s+свяжемся|спасибо\s+за\s+отклик|вы\s+откликнулись/i.test(t)) return true
     if (document.querySelector('[data-qa="success-screen"]')) return true
     if (document.querySelector('[data-qa="vacancy-response-success"]')) return true
     return false
@@ -663,7 +660,7 @@
     }
     btn.click()
     await sleep(280)
-    await postExtensionLog(apiBase, token, 'INFO', 'Сообщение отправлено в чат работодателя', 'apply_chat_sent')
+    await postExtensionLog(apiBase, token, 'SUCCESS', 'Сообщение отправлено в чат работодателя', 'apply_chat_sent')
     let sa = null
     try {
       sa = await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'sent' })
@@ -672,7 +669,7 @@
       await sendBg({ type: 'report', kind: 'skipped', last: { level: 'INFO', message: `Уже в базе: ${savePayload.vacancy_title}` } })
       return { ok: true, submitted: false, via_chat: true, error: 'duplicate' }
     }
-    await sendBg({ type: 'report', kind: 'sent', last: { level: 'INFO', message: `Отправлено в чат: ${savePayload.vacancy_title}` } })
+    await sendBg({ type: 'report', kind: 'sent', last: { level: 'SUCCESS', message: `Отправлено в чат: ${savePayload.vacancy_title}` } })
     return { ok: true, submitted: true, via_chat: true }
   }
 
@@ -730,38 +727,28 @@
 
     // ── Новая вкладка (есть href) ─────────────────────────────────────────
     if (hasHref) {
-      opener.target = '_blank'
-      const rel = (opener.getAttribute('rel') || '').trim()
-      opener.rel = rel ? `${rel} noopener noreferrer` : 'noopener noreferrer'
-      opener.click()
-      await sleep(400)
+      // Не кликаем — HH перехватывает и навигирует текущую вкладку.
+      // Передаём URL в background, он откроет новую вкладку сам.
+      const chatUrl = opener.href
+      await postExtensionLog(apiBase, token, 'INFO', `Чат: передаём URL в background для открытия новой вкладки: ${chatUrl}`, 'apply_warning_chat_bg_open')
 
-      // Пытаемся найти чат в ТЕКУЩЕЙ вкладке (редко, но бывает drawer)
-      const inputInPage = await waitForComposerWithRetries(() => findChatComposerFieldGlobal(), 3000)
-      if (inputInPage) {
-        if (!autoSubmit) {
-          const r = await pasteChatComposerSemiOnly(letter, apiBase, token, savePayload, 6000)
-          if (r) return { tried: true, ...r }
-        } else {
-          const r = await finishIfChatComposerReady(letter, apiBase, token, savePayload, 6000)
-          if (r) return { tried: true, ...r }
-        }
-      }
-
-      // Чат открылся в новой вкладке — сохраняем отклик и сообщаем пользователю
+      // Сохраняем отклик до навигации
       try {
         await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'sent' })
       } catch { /* */ }
+
       await sendBg({
         type: 'report',
         kind: 'sent',
         last: {
           level: 'INFO',
-          message: autoSubmit
-            ? `Чат открыт в новой вкладке — вставьте письмо там (скопировано в HHunter): ${savePayload.vacancy_title.slice(0, 52)}`
-            : `Полуавто: чат в новой вкладке — вставьте письмо вручную: ${savePayload.vacancy_title.slice(0, 52)}`,
+          message: `Чат открыт в новой вкладке (письмо сохранено в HHunter): ${savePayload.vacancy_title.slice(0, 52)}`,
         },
       })
+
+      // Просим background открыть чат в новой вкладке
+      await sendBg({ type: 'open_chat_tab', url: chatUrl })
+
       return { tried: true, ok: true, submitted: false, via_chat: true, chat_new_tab: true }
     }
 
@@ -832,17 +819,7 @@
       return { ok: true, submitted: false, letterless: true }
     }
 
-    // Полный авто: ищем и кликаем кнопку
-    // Сначала убеждаемся что модалка открыта (или открываем её)
-    let modal = responseModal()
-    if (!modal) {
-      const openBtn = findDirectApplyButton()
-      if (openBtn) {
-        openBtn.click()
-        await sleep(400)
-        modal = await waitUntil(() => responseModal(), 8000, 150)
-      }
-    }
+    // Модалка уже должна быть открыта когда мы сюда попадаем
 
     const subBtn = await waitUntil(() => {
       const s = findSubmitButton()
@@ -853,6 +830,9 @@
       await postExtensionLog(apiBase, token, 'WARNING', 'Кнопка «Откликнуться» не найдена (вариант 4)', 'apply_simple_btn_missing')
       try {
         await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'error', error_message: 'simple_submit_btn_missing' })
+      } catch { /* */ }
+      try {
+        await extensionApi('/extension/blacklist-vacancy', 'POST', { vacancy_id: savePayload.vacancy_id, reason: 'submit_btn_missing' })
       } catch { /* */ }
       await sendBg({ type: 'report', kind: 'error', last: { level: 'WARNING', message: 'Кнопка отправки не найдена (вариант 4).' } })
       return { ok: true, submitted: false, error: 'simple_submit_btn_missing', letterless: true }
@@ -930,6 +910,9 @@
       try {
         await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'error', error_message: 'submit_button_missing' })
       } catch { /* */ }
+      try {
+        await extensionApi('/extension/blacklist-vacancy', 'POST', { vacancy_id: savePayload.vacancy_id, reason: 'submit_btn_missing' })
+      } catch { /* */ }
       await sendBg({ type: 'report', kind: 'error', last: { level: 'WARNING', message: 'Не найдена кнопка отправки отклика (DOM).' } })
       return { ok: true, submitted: false, error: 'submit_button_missing' }
     }
@@ -977,8 +960,8 @@
       }
     } catch { /* */ }
 
-    await postExtensionLog(apiBase, token, 'INFO', `Форма: отклик подтверждён: ${savePayload.vacancy_title.slice(0, 80)}`, 'apply_form_ok')
-    await sendBg({ type: 'report', kind: 'sent', last: { level: 'INFO', message: `Готово: ${savePayload.vacancy_title}` } })
+    await postExtensionLog(apiBase, token, 'SUCCESS', `Форма: отклик подтверждён: ${savePayload.vacancy_title.slice(0, 80)}`, 'apply_form_ok')
+    await sendBg({ type: 'report', kind: 'sent', last: { level: 'SUCCESS', message: `Готово: ${savePayload.vacancy_title}` } })
     return { ok: true, submitted: true }
   }
 
@@ -1117,8 +1100,8 @@
       // Fallback: нажимаем «Всё равно откликнуться» и ждём форму
       await postExtensionLog(apiBase, token, 'INFO', 'Вариант 3 fallback: нажимаем «всё равно откликнуться»', 'apply_warning_dismiss')
       tryDismissCountryMismatchModal()
-      await sleep(450)
-      ui = await waitForApplyUiState(14000, 170)
+      await sleep(800)
+      ui = await waitForApplyUiState(20000, 200)
       await postExtensionLog(apiBase, token, 'INFO', `После снятия предупреждения: ${ui}`, 'apply_warning_after_dismiss')
     }
 
@@ -1146,12 +1129,16 @@
     // ════════════════════════════════════════════════════════════════════
 
     // Ждём textarea (с попутным снятием возможных новых предупреждений)
-    let ta = findLetterTextarea()
+    let ta = await ensureLetterTextareaVisible()
     if (!ta) {
-      const taWait = await waitUntil(() => {
+      let taWait = null
+      const t0ta = Date.now()
+      while (Date.now() - t0ta < 18000) {
         tryDismissCountryMismatchModal()
-        return findLetterTextarea()
-      }, 18000, 160)
+        taWait = await ensureLetterTextareaVisible()
+        if (taWait && visibleElement(taWait)) break
+        await sleep(160)
+      }
       ta = taWait
     }
 
@@ -1211,7 +1198,11 @@
     try {
       await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'error', error_message: 'ui_not_detected' })
     } catch { /* */ }
-    await sendBg({ type: 'report', kind: 'error', last: { level: 'WARNING', message: 'UI формы не определён — обновите страницу.' } })
+    // Автобан: вакансия стабильно не поддаётся — пропускаем в следующий раз
+    try {
+      await extensionApi('/extension/blacklist-vacancy', 'POST', { vacancy_id: savePayload.vacancy_id, reason: 'ui_not_detected' })
+    } catch { /* */ }
+    await sendBg({ type: 'report', kind: 'error', last: { level: 'WARNING', message: 'UI формы не определён — вакансия добавлена в блэклист.' } })
     return { ok: true, submitted: false, error: 'ui_not_detected' }
   }
 

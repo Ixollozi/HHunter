@@ -13,7 +13,7 @@ from .deps import get_db
 from .letter_generation import get_quality_letter, vacancy_dict_for_extension
 from .logger import log_app
 from .logger import log_letter_generation
-from .models import ActivityLog, Application, SearchConfig, Session as DbSession, User, UserSettings
+from .models import ActivityLog, Application, BlacklistedVacancy, SearchConfig, Session as DbSession, User, UserSettings
 from .search_params import search_config_dict_from_row
 from .schemas import (
     ExtensionGenerateLetterIn,
@@ -133,10 +133,17 @@ def extension_vacancy_known(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
-    """Есть ли уже запись по этой вакансии (любой статус) — чтобы не тратить генерацию письма."""
     vid = str(vacancy_id).strip()
     exists = db.scalar(select(Application.id).where(Application.user_id == user.id, Application.vacancy_id == vid))
-    return {"already_applied": bool(exists)}
+    if exists:
+        return {"already_applied": True}
+    blacklisted = db.scalar(
+        select(BlacklistedVacancy.id).where(
+            BlacklistedVacancy.user_id == user.id,
+            BlacklistedVacancy.vacancy_id == vid,
+        )
+    )
+    return {"already_applied": bool(blacklisted)}
 
 
 @router.post("/generate-letter", response_model=ExtensionGenerateLetterOut)
@@ -325,6 +332,28 @@ def extension_save_application(
         )
 
     return ExtensionSaveApplicationOut(id=app_row.id, status=app_row.status)
+
+
+@router.post("/blacklist-vacancy")
+def extension_blacklist_vacancy(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    vid = str((body or {}).get("vacancy_id") or "").strip()[:64]
+    reason = str((body or {}).get("reason") or "error").strip()[:128]
+    if not vid:
+        raise HTTPException(status_code=400, detail="vacancy_id обязателен")
+    exists = db.scalar(
+        select(BlacklistedVacancy.id).where(
+            BlacklistedVacancy.user_id == user.id,
+            BlacklistedVacancy.vacancy_id == vid,
+        )
+    )
+    if not exists:
+        db.add(BlacklistedVacancy(user_id=user.id, vacancy_id=vid, reason=reason))
+        db.commit()
+    return {"ok": True, "vacancy_id": vid}
 
 
 @router.post("/log")

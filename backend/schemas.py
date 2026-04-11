@@ -151,7 +151,7 @@ class ExtensionSaveApplicationOut(BaseModel):
     status: str
 
 
-_EXTENSION_LOG_LEVELS = frozenset({"INFO", "WARNING", "ERROR", "CRITICAL"})
+_EXTENSION_LOG_LEVELS = frozenset({"INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"})
 
 
 class ExtensionLogIn(BaseModel):

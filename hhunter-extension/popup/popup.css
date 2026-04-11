@@ -63,6 +63,12 @@ button#btnSave {
   margin: 3px 0;
 }
 
+/* Успешные отклики в цикле — зелёным */
+.stats-sent {
+  color: #4ade80;
+  font-weight: 600;
+}
+
 .hint {
   font-size: 11px;
   color: #94a3b8;

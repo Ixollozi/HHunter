@@ -41,3 +41,18 @@ def init_db() -> None:
             if "hourly_limit" not in sc_cols:
                 conn.execute(text("ALTER TABLE search_configs ADD COLUMN hourly_limit INTEGER NOT NULL DEFAULT 35"))
 
+    if "blacklisted_vacancies" not in tables:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE blacklisted_vacancies ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "user_id INTEGER NOT NULL REFERENCES users(id), "
+                    "vacancy_id VARCHAR(64) NOT NULL, "
+                    "reason VARCHAR(128), "
+                    "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+            conn.execute(text("CREATE INDEX ix_blacklisted_vacancies_user_id ON blacklisted_vacancies(user_id)"))
+            conn.execute(text("CREATE INDEX ix_blacklisted_vacancies_vacancy_id ON blacklisted_vacancies(vacancy_id)"))
+

@@ -34,7 +34,7 @@ async function loadUi(options) {
   }
   const stats = state?.stats || { sent: 0, skipped: 0, error: 0 }
   const modeHint = resp?.run_mode === 'full_auto' ? ' · авто-поиск' : ' · активная вкладка'
-  $('statsLine').textContent = `Цикл: ✅ ${stats.sent} ⏭️ ${stats.skipped} ❌ ${stats.error}${modeHint}`
+  $('statsLine').innerHTML = `Цикл: <span class="stats-sent" title="Успешно отправлено">✅ ${stats.sent}</span> ⏭️ ${stats.skipped} ❌ ${stats.error}${modeHint}`
   $('lastLine').textContent = state?.last?.message ? `Последнее: ${state.last.message}` : 'Последнее: —'
 }
 

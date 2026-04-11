@@ -11,3 +11,10 @@ body,
 body {
   @apply bg-slate-950 text-slate-100;
 }
+
+/* Журнал: бейдж SUCCESS (явный слой — не зависит от JIT внутри функций) */
+@layer components {
+  .log-badge-success {
+    @apply text-green-200 bg-green-600/35 border border-green-500/50;
+  }
+}

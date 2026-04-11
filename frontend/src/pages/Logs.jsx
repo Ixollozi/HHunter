@@ -2,10 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { Hint } from '../components/Hint'
 
+function normLevel(level) {
+  return String(level ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\u00a0/g, '')
+}
+
 function levelClass(level) {
-  const u = String(level || '').toUpperCase()
+  const u = normLevel(level)
   if (u === 'ERROR' || u === 'CRITICAL') return 'text-red-300 bg-red-500/10'
   if (u === 'WARNING') return 'text-amber-200 bg-amber-500/10'
+  if (u === 'SUCCESS') return 'log-badge-success'
   return 'text-slate-300 bg-slate-800/40'
 }
 

@@ -120,7 +120,10 @@ export default function Results() {
                 }`}
               >
                 <td className="p-3 text-slate-400">{fmt(r.applied_at)}</td>
-                <td className="p-3" title={appStatusTitle(r.status)}>
+                <td
+                  className={`p-3 font-medium ${r.status === 'sent' ? 'text-green-400' : ''}`}
+                  title={appStatusTitle(r.status)}
+                >
                   {appStatusLabel(r.status)}
                 </td>
                 <td className="p-3">

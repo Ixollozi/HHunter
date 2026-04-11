@@ -179,6 +179,8 @@ async function tabsSendMessageWithTimeout(tabId, message, timeoutMs) {
         errText,
       )
     ) {
+      // Ждём — content мог продолжить работу после разрыва канала
+      await sleep(8000)
       const recovered = await tryRecoverApplyAfterContentNav(tabId)
       if (recovered) return recovered
     }
@@ -579,6 +581,7 @@ async function fullAutoLoop() {
           },
         })
       }
+      await sleep(1200)
       await chrome.tabs.remove(vacTab.id).catch(() => {})
 
       const delaySettings = await loadSettings().catch(() => ({ settings: { delay_min: 2, delay_max: 4 } }))
@@ -644,6 +647,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   ;(async () => {
     try {
       if (msg.type === 'hhunter_keepalive') {
+        return reply({ ok: true })
+      }
+
+      if (msg.type === 'open_chat_tab') {
+        const url = String(msg.url || '')
+        if (url.startsWith('https://') || url.startsWith('http://')) {
+          chrome.tabs.create({ url, active: true }).catch(() => {})
+        }
         return reply({ ok: true })
       }
 

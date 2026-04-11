@@ -24,17 +24,28 @@ def groq_chat_completion(
     user_prompt: str,
     temperature: float = 0.3,
     max_tokens: int = 650,
+    extra_body: dict[str, Any] | None = None,
 ) -> GroqResult:
     client = Groq(api_key=api_key)
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
+    create_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    eb: dict[str, Any] = {}
+    if extra_body:
+        eb.update(extra_body)
+    # Groq reasoning — в доке задаются полями верхнего уровня, не вложенным объектом.
+    for _rk in ("reasoning_format", "reasoning_effort", "include_reasoning"):
+        if _rk in eb:
+            create_kwargs[_rk] = eb.pop(_rk)
+    if eb:
+        create_kwargs["extra_body"] = eb
+    resp = client.chat.completions.create(**create_kwargs)
 
     text = ""
     try:

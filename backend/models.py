@@ -24,6 +24,7 @@ class User(Base):
     sessions: Mapped[list["Session"]] = relationship(back_populates="user")
     applications: Mapped[list["Application"]] = relationship(back_populates="user")
     activity_logs: Mapped[list["ActivityLog"]] = relationship(back_populates="user")
+    blacklisted_vacancies: Mapped[list["BlacklistedVacancy"]] = relationship(back_populates="user")
 
 
 class UserSettings(Base):
@@ -141,4 +142,17 @@ class ActivityLog(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
 
     user: Mapped[User] = relationship(back_populates="activity_logs")
+
+
+class BlacklistedVacancy(Base):
+    __tablename__ = "blacklisted_vacancies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    vacancy_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.UTC)
+    )
+    user: Mapped[User] = relationship(back_populates="blacklisted_vacancies")
 
