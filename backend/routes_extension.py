@@ -143,6 +143,8 @@ def extension_vacancy_known(
             BlacklistedVacancy.vacancy_id == vid,
         )
     )
+    if blacklisted:
+        log_app(user.id, "INFO", f"[blacklist] Пропуск вакансии {vid} — в чёрном списке", None)
     return {"already_applied": bool(blacklisted)}
 
 
@@ -344,16 +346,42 @@ def extension_blacklist_vacancy(
     reason = str((body or {}).get("reason") or "error").strip()[:128]
     if not vid:
         raise HTTPException(status_code=400, detail="vacancy_id обязателен")
-    exists = db.scalar(
+
+    error_count = db.scalar(
+        select(func.count(Application.id)).where(
+            Application.user_id == user.id,
+            Application.vacancy_id == vid,
+            Application.status == "error",
+        )
+    )
+    threshold = 3
+    already_blacklisted = db.scalar(
         select(BlacklistedVacancy.id).where(
             BlacklistedVacancy.user_id == user.id,
             BlacklistedVacancy.vacancy_id == vid,
         )
     )
-    if not exists:
+    if already_blacklisted:
+        return {"ok": True, "blacklisted": True, "vacancy_id": vid, "reason": "already_in_blacklist"}
+
+    if int(error_count or 0) >= threshold:
         db.add(BlacklistedVacancy(user_id=user.id, vacancy_id=vid, reason=reason))
         db.commit()
-    return {"ok": True, "vacancy_id": vid}
+        log_app(
+            user.id,
+            "WARNING",
+            f"[blacklist] Вакансия {vid} добавлена в блэклист после {error_count} ошибок (причина: {reason})",
+            None,
+        )
+        return {"ok": True, "blacklisted": True, "vacancy_id": vid, "error_count": int(error_count or 0)}
+
+    log_app(
+        user.id,
+        "INFO",
+        f"[blacklist] Вакансия {vid} — ошибка {int(error_count or 0)}/{threshold}, блэклист не применён",
+        None,
+    )
+    return {"ok": True, "blacklisted": False, "vacancy_id": vid, "error_count": int(error_count or 0)}
 
 
 @router.post("/log")

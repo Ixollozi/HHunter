@@ -8,42 +8,97 @@
   </head>
   <body>
     <div class="wrap">
-      <div class="title">HHunter</div>
-      <p class="hint">Только JWT, без слова Bearer. Или «Токен с сайта».</p>
+      <header class="head">
+        <div class="title">HHunter</div>
+        <p class="lead">
+          Генерирует сопроводительное письмо и помогает отправить отклик на HeadHunter. Работает вместе с
+          сайтом HHunter, который вы (или администратор) запускаете отдельно.
+        </p>
+      </header>
+
+      <h2 class="section-title">1. Подключение</h2>
       <div class="row">
-        <label>API base</label>
-        <input id="apiBase" placeholder="http://localhost:8000" />
+        <label for="apiBase">Адрес сайта HHunter</label>
+        <input
+          id="apiBase"
+          type="url"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="http://localhost:8000"
+          aria-describedby="helpServer"
+        />
       </div>
+      <p id="helpServer" class="field-help">
+        Скопируйте из адресной строки браузера, когда открыта ваша панель HHunter (тот же компьютер или сервер в
+        интернете).
+      </p>
+
       <div class="row">
-        <label>JWT token</label>
-        <input id="token" placeholder="eyJ…" />
+        <label for="token">Код входа</label>
+        <input id="token" autocomplete="off" spellcheck="false" placeholder="вставьте или возьмите кнопкой ниже" />
       </div>
-      <div class="row">
-        <label></label>
-        <button type="button" id="btnPullToken" class="btn-secondary">Токен с сайта</button>
+      <div class="row row-actions">
+        <span class="label-spacer" aria-hidden="true"></span>
+        <button type="button" id="btnPullToken" class="btn-secondary">Взять код с открытой вкладки HHunter</button>
       </div>
+      <p class="field-help">
+        Сначала войдите на сайт HHunter во вкладке Chrome, затем нажмите эту кнопку. Если вставляете вручную —
+        только сам длинный код, без слова «Bearer» в начале.
+      </p>
+
+      <h2 class="section-title">2. Какой HeadHunter</h2>
       <div class="row">
-        <label>Сайт HeadHunter</label>
-        <select id="hhOrigin" title="Полный цикл открывает поиск и вакансии на этом домене; активная вкладка — тот же домен.">
+        <label for="hhOrigin">Страна / сайт</label>
+        <select
+          id="hhOrigin"
+          title="На этом домене расширение будет открывать поиск и вакансии в режиме полного цикла."
+        >
           <option value="https://hh.ru">Россия — hh.ru</option>
           <option value="https://tashkent.hh.uz">Ташкент — tashkent.hh.uz</option>
           <option value="https://hh.uz">Узбекистан — hh.uz</option>
           <option value="https://hh.kz">Казахстан — hh.kz</option>
         </select>
       </div>
-      <div class="row">
-        <label></label>
-        <label class="check"><input type="checkbox" id="fullAuto" /> Полный цикл: поиск → вакансии → отклик</label>
-      </div>
-      <div class="row buttons">
-        <button id="btnSave">Сохранить</button>
-        <button id="btnToggle">Запустить</button>
+
+      <h2 class="section-title">3. Режим</h2>
+      <div class="row row-check">
+        <span class="label-spacer" aria-hidden="true"></span>
+        <label class="check">
+          <input type="checkbox" id="fullAuto" />
+          <span class="check-text">
+            <strong>Самому открывать поиск и ходить по вакансиям</strong>
+            <span class="check-sub"
+              >Если выключено — расширение помогает только на той странице hh.ru (или другого домена), которую вы уже
+              открыли сами.</span
+            >
+          </span>
+        </label>
       </div>
 
-      <div class="box">
-        <div id="modelLine" class="muted">—</div>
-        <div id="statsLine" class="muted">—</div>
-        <div id="lastLine" class="muted">—</div>
+      <div class="cycle-status-wrap" aria-live="polite">
+        <div
+          id="cycleStatusBadge"
+          class="cycle-status cycle-status--stopped"
+          role="status"
+          aria-label="Состояние цикла откликов"
+        >
+          Остановлен
+        </div>
+        <p id="cycleStatusHint" class="cycle-status-hint">
+          Пока окно открыто, статус обновляется автоматически.
+        </p>
+      </div>
+
+      <div class="row buttons">
+        <button type="button" id="btnSave">Сохранить настройки</button>
+        <button type="button" id="btnToggle">Запустить</button>
+      </div>
+
+      <h2 class="section-title section-title--tight">Сейчас</h2>
+      <div class="box" role="status" aria-live="polite">
+        <div id="modelLine" class="status-line">Загрузка…</div>
+        <div id="statsLine" class="status-line">—</div>
+        <div id="lastLine" class="status-line status-line--last">—</div>
       </div>
     </div>
     <script src="popup.js"></script>

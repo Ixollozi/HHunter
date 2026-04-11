@@ -126,7 +126,7 @@ class ExtensionSaveApplicationIn(BaseModel):
     company_name: str | None = Field(default=None, max_length=512)
     company_url: str | None = Field(default=None, max_length=4096)
     contact_name: str | None = Field(default=None, max_length=512)
-    contact_phone: str | None = Field(default=None, max_length=64)
+    contact_phone: str | None = Field(default=None, max_length=128)
     salary_from: int | None = None
     salary_to: int | None = None
     salary_currency: str | None = Field(default=None, max_length=8)

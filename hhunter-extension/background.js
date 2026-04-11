@@ -571,6 +571,39 @@ async function fullAutoLoop() {
           'full_auto_vacancy_done',
         )
       } catch (e) {
+        if (/message channel closed|asynchronous response/i.test(String(e.message || e))) {
+          try {
+            // Сначала сохраняем ошибку в applications — счётчик для блэклиста
+            await apiFetch(apiBase, token, '/extension/save-application', {
+              method: 'POST',
+              body: JSON.stringify({
+                vacancy_id: vid,
+                vacancy_title: `Вакансия ${vid}`,
+                vacancy_url: `${hhOrigin}/vacancy/${vid}`,
+                status: 'error',
+                error_message: 'channel_closed',
+              }),
+            })
+          } catch {
+            /* уже в базе — игнор 409 */
+          }
+          try {
+            const blRes = await apiFetch(apiBase, token, '/extension/blacklist-vacancy', {
+              method: 'POST',
+              body: JSON.stringify({ vacancy_id: vid, reason: 'channel_closed' }),
+            })
+            if (blRes && blRes.blacklisted) {
+              void extActivityLog(
+                'WARNING',
+                `Вакансия ${vid} добавлена в блэклист после повторных ошибок (channel_closed)`,
+                'extension_bg',
+                'full_auto_blacklist',
+              )
+            }
+          } catch {
+            /* */
+          }
+        }
         void extActivityLog('ERROR', `Вакансия ${vid}: ${e.message || e}`, 'extension_bg', 'full_auto_vacancy_msg_fail')
         await setState({
           last: {

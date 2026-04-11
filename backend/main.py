@@ -11,6 +11,7 @@ from .routes_reports import router as reports_router
 from .routes_extension import router as extension_router
 from .routes_diagnostics import router as diagnostics_router
 from .routes_dashboard import router as dashboard_router
+from .routes_downloads import router as downloads_router
 
 
 def create_app() -> FastAPI:
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(extension_router)
     app.include_router(diagnostics_router)
     app.include_router(dashboard_router)
+    app.include_router(downloads_router)
 
     return app
 

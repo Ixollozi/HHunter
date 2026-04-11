@@ -20,6 +20,7 @@ const SEARCH_LABELS = {
 }
 
 const DIAG_LETTER_KEY = 'hhunter_diag_include_letter'
+const DIAG_BAR_HIDDEN_KEY = 'hhunter_diag_bar_hidden'
 
 function formatSearchValue(v) {
   if (v == null || v === '') return '—'
@@ -28,7 +29,16 @@ function formatSearchValue(v) {
   return String(v)
 }
 
+function readBarHidden() {
+  try {
+    return localStorage.getItem(DIAG_BAR_HIDDEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 export function AppDiagnosticsPanel() {
+  const [barHidden, setBarHidden] = useState(readBarHidden)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState(null)
@@ -137,6 +147,25 @@ export function AppDiagnosticsPanel() {
     setCopied(false)
   }
 
+  function hideBottomBar() {
+    setBarHidden(true)
+    try {
+      localStorage.setItem(DIAG_BAR_HIDDEN_KEY, '1')
+    } catch {
+      /* ignore */
+    }
+    closePanel()
+  }
+
+  function showBottomBar() {
+    setBarHidden(false)
+    try {
+      localStorage.removeItem(DIAG_BAR_HIDDEN_KEY)
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function copyLetter() {
     const text = data?.letter_demo?.letter
     if (!text) return
@@ -160,8 +189,37 @@ export function AppDiagnosticsPanel() {
 
   return (
     <>
-      <div className="fixed bottom-0 inset-x-0 z-40 border-t border-slate-800 bg-slate-950/95 backdrop-blur px-4 py-3 shadow-[0_-8px_30px_rgba(0,0,0,0.35)]">
-        <div className="mx-auto max-w-6xl flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+      <div
+        className={`fixed bottom-0 inset-x-0 z-40 border-t border-slate-800 bg-slate-950/95 backdrop-blur shadow-[0_-8px_30px_rgba(0,0,0,0.35)] transition-transform duration-300 ease-in-out motion-reduce:transition-none ${
+          barHidden ? 'translate-y-full pointer-events-none' : 'translate-y-0'
+        }`}
+        aria-hidden={barHidden}
+      >
+        <div className="relative mx-auto max-w-6xl px-4 pt-2 pb-3">
+          <button
+            type="button"
+            onClick={hideBottomBar}
+            title="Скрыть панель проверки"
+            aria-label="Скрыть панель проверки"
+            className={`absolute right-2 top-1 z-10 rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-800/90 hover:text-slate-200 ${btnNeutral}`}
+          >
+            <span className="sr-only">Скрыть</span>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+          <div className="flex flex-col gap-3 pr-10 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:pr-12">
           <p className="text-sm text-slate-400 min-w-0 sm:max-w-xl">
             Проверка: настройки, поиск и hh.ru без расхода Groq. Отклик на вакансию не отправляется.
           </p>
@@ -187,8 +245,23 @@ export function AppDiagnosticsPanel() {
               {loading && open ? 'Проверка…' : 'Протестировать приложение'}
             </button>
           </div>
+          </div>
         </div>
       </div>
+
+      {barHidden ? (
+        <button
+          type="button"
+          onClick={showBottomBar}
+          title="Показать панель проверки приложения"
+          className={`fixed bottom-0 left-1/2 z-40 -translate-x-1/2 rounded-t-lg border border-b-0 border-slate-700/90 bg-slate-900/95 px-4 py-2 text-xs font-medium text-slate-400 shadow-lg backdrop-blur-sm transition-colors hover:border-slate-600 hover:text-slate-200 ${btnNeutral}`}
+        >
+          Проверка приложения
+          <span className="ml-1.5 inline-block translate-y-px" aria-hidden>
+            ▲
+          </span>
+        </button>
+      ) : null}
 
       {open && (
         <div

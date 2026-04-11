@@ -2,8 +2,8 @@
 """
 Запуск HHunter из корня репозитория.
 
-Без --dev фронт поднимается через vite preview: перед стартом выполняется npm run build,
-если нет dist/ или файлы в frontend/src новее dist/index.html (чтобы правки UI не «терялись»).
+По умолчанию: режим разработки — vite dev (HMR) + uvicorn с --reload по каталогу backend/.
+Отключить лёгкий preview без HMR: python start.py --no-dev
 
 Ожидаемая структура:
   <repo>/
@@ -141,8 +141,19 @@ def frontend_preview_needs_build(frontend_dir: Path) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="HHunter starter (lightweight by default).")
-    ap.add_argument("--dev", action="store_true", help="Dev mode: uvicorn --reload + vite dev (heavy).")
+    ap = argparse.ArgumentParser(description="HHunter starter (dev-friendly by default).")
+    ap.add_argument(
+        "--dev",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Режим разработки: vite dev (HMR) + перезапуск API при правках в backend/ (по умолчанию: вкл.). "
+        "Лёгкий режим без HMR: --no-dev (vite preview, см. также пересборку dist).",
+    )
+    ap.add_argument(
+        "--no-reload",
+        action="store_true",
+        help="Не перезапускать uvicorn при изменении файлов (только вместе с бэкендом; для прод-подобного запуска).",
+    )
     ap.add_argument("--no-frontend", action="store_true", help="Do not start frontend.")
     ap.add_argument("--no-backend", action="store_true", help="Do not start backend.")
     ap.add_argument("--host", default="127.0.0.1", help="Backend host (default: 127.0.0.1).")
@@ -247,18 +258,21 @@ def main() -> int:
                 return rc
 
         if not args.no_backend:
+            reload_args: list[str] = []
+            if not args.no_reload:
+                # Только backend/ — иначе правки во frontend дергали бы лишние перезапуски API.
+                reload_args = ["--reload", "--reload-dir", "backend"]
             backend_cmd = [
                 str(py),
                 "-m",
                 "uvicorn",
                 "backend.main:app",
+                *reload_args,
                 "--host",
                 str(args.host),
                 "--port",
                 str(args.port),
             ]
-            if args.dev:
-                backend_cmd.insert(backend_cmd.index("--host"), "--reload")
             procs.append(_safe_popen(backend_cmd, cwd=ROOT))
 
         if not args.no_frontend:
@@ -292,7 +306,10 @@ def main() -> int:
     print("Корень проекта:", ROOT)
     backend_url = f"http://{args.host}:{args.port}" if not args.no_backend else "(backend off)"
     frontend_url = f"http://127.0.0.1:{args.frontend_port}" if not args.no_frontend else "(frontend off)"
-    mode = "DEV (vite + uvicorn --reload)" if args.dev else "LIGHT (preview: авто-сборка при изменении src)"
+    if args.dev:
+        mode = "DEV (vite dev + HMR, uvicorn --reload backend/)"
+    else:
+        mode = "LIGHT (vite preview; при старте — пересборка dist если src новее; API с --reload backend/)" if not args.no_reload else "LIGHT (preview; API без --reload)"
     print(f"Режим: {mode}")
     print(f"Бэкенд: {backend_url}  |  Фронт: {frontend_url}")
     print("Ctrl+C — остановить оба процесса.")

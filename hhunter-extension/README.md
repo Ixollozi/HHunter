@@ -9,12 +9,11 @@
 
 ## Установка
 
-1. Откройте `chrome://extensions`, включите **Режим разработчика**.
-2. **Загрузить распакованное расширение** → выберите папку `hhunter-extension` из корня репозитория.
-3. В popup при необходимости укажите:
-   - **URL API** — тот же хост, что в `VITE_API_BASE` фронта (обычно `http://localhost:8000`).
-   - **URL сайта HHunter** — origin фронта (обычно `http://localhost:5173`), откуда читается `localStorage` с `hhunter_token`.
-4. В `manifest.json` в `host_permissions` должны быть ваши origin фронта и API (для production добавьте строки с `https://…`).
+1. **Файлы расширения:** скачайте архив с работающего HHunter — в веб-интерфейсе раздел **«Расширение»** (кнопка «Скачать hhunter-extension.zip»), либо запрос `GET /downloads/hhunter-extension.zip` к API. Распакуйте ZIP: внутри должна быть папка `hhunter-extension` с `manifest.json`. Либо используйте папку `hhunter-extension` из корня репозитория без архива.
+2. Откройте `chrome://extensions`, включите **Режим разработчика**.
+3. **Загрузить распакованное расширение** → укажите папку `hhunter-extension` (не `.zip` файл).
+4. В окне расширения: **адрес сайта HHunter** — URL API (как в `VITE_API_BASE`, обычно `http://localhost:8000`); **код входа** — кнопка с вкладки HHunter или `hhunter_token` из Local Storage фронта.
+5. В `manifest.json` в `host_permissions` должны быть ваши origin фронта и API (для production добавьте строки с `https://…`).
 
 ## Режимы работы
 

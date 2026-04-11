@@ -78,6 +78,69 @@
     return t.slice(0, 512)
   }
 
+  function inferSalaryCurrency(text) {
+    const t = String(text || '')
+    const low = t.toLowerCase()
+    if (/₽|\bруб\.?|\brub\b|\brur\b/i.test(t)) return 'RUB'
+    if (/\$|\busd\b/i.test(low)) return 'USD'
+    if (/€|\beur\b/i.test(low)) return 'EUR'
+    if (/₸|\bтенге\b|\bkzt\b/i.test(low)) return 'KZT'
+    if (/so'm|so'm\.|soʻm|сум\.?|\buzs\b/i.test(low)) return 'UZS'
+    if (/£|\bgbp\b/i.test(low)) return 'GBP'
+    return null
+  }
+
+  /** Числа для Excel/API: [data-qa="vacancy-salary"] — «от 30 000 000 so'm», диапазоны с тире и т.д. */
+  function parseSalaryFromVacancyDom() {
+    const el =
+      document.querySelector('[data-qa="vacancy-salary"]') ||
+      document.querySelector('[data-qa="sidebar-salary"]')
+    if (!el) return { salary_from: null, salary_to: null, salary_currency: null }
+    const raw = (el.innerText || el.textContent || '').replace(/\u00a0/g, ' ')
+    const text = raw.replace(/\s+/g, ' ').trim()
+    if (!text || /договорн|обсужден|по\s+согласованию/i.test(text)) {
+      return { salary_from: null, salary_to: null, salary_currency: inferSalaryCurrency(text) }
+    }
+
+    const nums = []
+    const re = /(\d(?:[\d\s\u00a0]*\d|\d))/g
+    let m
+    while ((m = re.exec(text))) {
+      const n = parseInt(m[1].replace(/[\s\u00a0]/g, ''), 10)
+      if (!Number.isNaN(n) && n >= 0) nums.push(n)
+    }
+
+    const low = text.toLowerCase()
+    const hasOt = /\bот\s+[\d\s\u00a0]/.test(raw) || /\bfrom\s+\d/i.test(low)
+    const hasDo = /\bдо\s+[\d\s\u00a0]/.test(raw) || /\bto\s+\d/i.test(low)
+    const hasRangeSep = /\d\s*[–—−]\s*\d/.test(text)
+
+    const currency = inferSalaryCurrency(text)
+    if (nums.length === 0) return { salary_from: null, salary_to: null, salary_currency: currency }
+
+    let salary_from = null
+    let salary_to = null
+    if (nums.length >= 2 && (hasRangeSep || (hasOt && hasDo))) {
+      salary_from = Math.min(nums[0], nums[nums.length - 1])
+      salary_to = Math.max(nums[0], nums[nums.length - 1])
+    } else if (nums.length >= 2 && hasOt && !hasDo) {
+      salary_from = Math.min(...nums)
+      salary_to = Math.max(...nums)
+    } else if (nums.length === 1) {
+      if (hasDo && !hasOt) salary_to = nums[0]
+      else salary_from = nums[0]
+    } else {
+      salary_from = nums[0]
+      salary_to = nums.length > 1 ? nums[nums.length - 1] : null
+    }
+
+    return {
+      salary_from: salary_from != null ? salary_from : null,
+      salary_to: salary_to != null ? salary_to : null,
+      salary_currency: currency,
+    }
+  }
+
   function collectVacancyFromPage() {
     const title =
       document.querySelector('[data-qa="vacancy-title"]')?.textContent?.trim() ||
@@ -95,16 +158,111 @@
     const split = splitDescriptionAndRequirements(descRaw)
     const vacancyUrl = location.href
     const vacancyId = parseVacancyIdFromUrl(vacancyUrl) || ''
+    const salNum = parseSalaryFromVacancyDom()
     return {
       vacancy_title: title,
       vacancy_description: split.description || descRaw.trim(),
       vacancy_requirements: split.vacancy_requirements || '',
       key_skills: collectKeySkillsFromPage(),
       salary_info: collectSalaryFromPage(),
+      salary_from: salNum.salary_from,
+      salary_to: salNum.salary_to,
+      salary_currency: salNum.salary_currency,
       company_name: company,
       vacancy_url: vacancyUrl,
       vacancy_id: vacancyId,
     }
+  }
+
+  function looksLikePhoneText(s) {
+    const t = String(s || '').replace(/\s+/g, ' ').trim()
+    if (t.length < 5) return false
+    const digits = (t.match(/\d/g) || []).length
+    return digits >= 5
+  }
+
+  function readVacancyContactPhoneFromDom() {
+    const el = document.querySelector('[data-qa="vacancy-contacts__phone-number"]')
+    if (!el || !visibleElement(el)) return ''
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim()
+    return looksLikePhoneText(txt) ? txt : ''
+  }
+
+  function findSvyazatsyaClickTarget() {
+    const labelSpans = document.querySelectorAll('span[class*="magritte-button__label"]')
+    for (const span of labelSpans) {
+      const tx = (span.textContent || '').replace(/\s+/g, ' ').trim()
+      if (tx !== 'Связаться') continue
+      let node = span
+      for (let i = 0; i < 10 && node; i++) {
+        if (node.matches && node.matches('button, [role="button"], a')) {
+          if (visibleElement(node) && isSubmitLikeClickable(node)) return node
+        }
+        node = node.parentElement
+      }
+      const view = span.closest('span[class*="magritte-button-view"]')
+      if (view && visibleElement(view)) return view
+    }
+    const candidates = document.querySelectorAll('button, [role="button"], a')
+    for (const b of candidates) {
+      const tx = labelOf(b)
+      if (tx === 'Связаться' && visibleElement(b) && isSubmitLikeClickable(b)) return b
+    }
+    return null
+  }
+
+  function readVacancyContactNameFromDom() {
+    const selectors = [
+      '[data-qa="vacancy-contacts__fio"]',
+      '[data-qa="vacancy-contacts__name"]',
+      '[data-qa="vacancy-contacts-recruiter-name"]',
+    ]
+    for (const sel of selectors) {
+      const el = document.querySelector(sel)
+      if (!el || !visibleElement(el)) continue
+      const nm = (el.textContent || '').replace(/\s+/g, ' ').trim()
+      if (nm.length >= 2 && nm.length < 512) return nm.slice(0, 512)
+    }
+    return ''
+  }
+
+  async function tryCollectVacancyContact(timeoutMs) {
+    const t = timeoutMs || 10000
+    const out = { contact_phone: '', contact_name: '' }
+
+    let phone = readVacancyContactPhoneFromDom()
+    if (phone) {
+      out.contact_phone = phone.slice(0, 128)
+      out.contact_name = readVacancyContactNameFromDom()
+      return out
+    }
+
+    const btn = findSvyazatsyaClickTarget()
+    if (!btn) return out
+
+    try {
+      btn.click()
+    } catch {
+      return out
+    }
+
+    phone =
+      (await waitUntil(() => {
+        const p = readVacancyContactPhoneFromDom()
+        return p || null
+      }, t, 180)) || ''
+
+    out.contact_phone = phone.slice(0, 128)
+    out.contact_name = readVacancyContactNameFromDom()
+
+    try {
+      const ev = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true })
+      document.body.dispatchEvent(ev)
+      document.dispatchEvent(ev)
+      await sleep(220)
+    } catch { /* */ }
+
+    return out
   }
 
   function setNativeValue(el, value) {
@@ -1002,6 +1160,13 @@
       'apply_start',
     )
 
+    const contactInfo = await tryCollectVacancyContact(10000)
+    payload.contact_phone = contactInfo.contact_phone || ''
+    payload.contact_name = contactInfo.contact_name || ''
+    if (payload.contact_phone) {
+      await postExtensionLog(apiBase, token, 'INFO', `Телефон из «Связаться»: ${payload.contact_phone.slice(0, 40)}`, 'apply_contact_ok')
+    }
+
     // ── Генерация письма ─────────────────────────────────────────────────
     let res
     try {
@@ -1039,6 +1204,11 @@
       vacancy_title: payload.vacancy_title,
       vacancy_url: payload.vacancy_url,
       company_name: payload.company_name || null,
+      contact_name: payload.contact_name || null,
+      contact_phone: payload.contact_phone || null,
+      salary_from: payload.salary_from != null ? payload.salary_from : null,
+      salary_to: payload.salary_to != null ? payload.salary_to : null,
+      salary_currency: payload.salary_currency || null,
       cover_letter: letter,
       model_used: modelUsed,
     }

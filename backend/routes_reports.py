@@ -6,9 +6,11 @@ from sqlalchemy.orm import Session
 
 from .auth import get_current_user
 from .deps import get_db
-from .models import Application, Session as DbSession
+from .models import Application, BlacklistedVacancy, Session as DbSession
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+_ZERO_DAY = {"sent": 0, "skipped": 0, "error": 0, "blacklisted": 0}
 
 
 @router.get("/summary")
@@ -27,15 +29,28 @@ def summary(db: Session = Depends(get_db), user=Depends(get_current_user)) -> di
 
     rows = db.execute(stmt).all()
     by_day: dict[str, dict[str, int]] = {}
-    totals = {"sent": 0, "skipped": 0, "error": 0}
+    totals = {"sent": 0, "skipped": 0, "error": 0, "blacklisted": 0}
     for d, status, cnt in rows:
         key = str(d)
-        by_day.setdefault(key, {"sent": 0, "skipped": 0, "error": 0})
+        by_day.setdefault(key, dict(_ZERO_DAY))
         by_day[key][status] = int(cnt)
         if status in totals:
             totals[status] += int(cnt)
 
-    series = [{"day": d, **vals} for d, vals in by_day.items()]
+    bl_day = func.date(BlacklistedVacancy.created_at)
+    bl_stmt = (
+        select(bl_day.label("day"), func.count(BlacklistedVacancy.id).label("cnt"))
+        .where(BlacklistedVacancy.user_id == user.id)
+        .group_by(bl_day)
+        .order_by(bl_day)
+    )
+    for d, cnt in db.execute(bl_stmt).all():
+        key = str(d)
+        by_day.setdefault(key, dict(_ZERO_DAY))
+        by_day[key]["blacklisted"] = int(cnt)
+        totals["blacklisted"] += int(cnt)
+
+    series = [{"day": d, **vals} for d, vals in sorted(by_day.items(), key=lambda x: x[0])]
     return {"totals": totals, "series": series}
 
 

@@ -51,12 +51,6 @@ export function Layout() {
                   Главная
                 </NavItem>
                 <NavItem
-                  to="/logs"
-                  title="Пошаговый журнал расширения Chrome (автопоиск и полуавтомат) в реальном времени."
-                >
-                  Логи
-                </NavItem>
-                <NavItem
                   to="/extension"
                   title="Как установить Chrome-расширение HHunter для работы на hh.ru."
                 >
@@ -85,6 +79,12 @@ export function Layout() {
                   title="Графики и сводка по дням, доля отправлено/пропуски/ошибки, история сессий."
                 >
                   Отчёты
+                </NavItem>
+                <NavItem
+                  to="/logs"
+                  title="Пошаговый журнал расширения Chrome (автопоиск и полуавтомат) в реальном времени."
+                >
+                  Логи
                 </NavItem>
               </nav>
               <div className="ml-auto">

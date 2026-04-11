@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "HHunter",
-  "version": "1.2.1",
-  "description": "HHunter: авто-отклик на HeadHunter (hh.ru, hh.uz, …) через ваш бэкенд (Groq/Qwen).",
+  "version": "1.2.3",
+  "description": "HHunter: черновик отклика и отправка на HeadHunter (hh.ru и др.) через ваш сайт HHunter.",
   "permissions": ["storage", "tabs", "scripting", "activeTab"],
   "host_permissions": [
     "https://hh.ru/*",
