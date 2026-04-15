@@ -17,5 +17,6 @@ frontend/.env
 .venv
 .venv/
 .cursorignore
+.vscode/
 __pycache__
 _pycache_/

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, desc, func, select
@@ -27,6 +28,29 @@ from .schemas import (
 router = APIRouter(prefix="/extension", tags=["extension"])
 
 _KEEP_ACTIVITY_ROWS = 2500
+
+# --- Simple relevance filter (anti-spam, save tokens) ---
+CORE_SKILLS = {
+    "python",
+    "fastapi",
+    "django",
+    "postgresql",
+    "postgres",
+    "docker",
+    "redis",
+    "celery",
+    "rest",
+    "api",
+    "flask",
+}
+
+
+def score_vacancy(description: str, title: str) -> int:
+    text = f"{description or ''} {title or ''}".lower()
+    score = sum(1 for s in CORE_SKILLS if s in text)
+    if any(w in text for w in ["senior", "lead", "architect", "5+ лет", "7+ лет"]):
+        score -= 3
+    return score
 
 
 def _prune_user_activity_logs(db: Session, user_id: int) -> None:
@@ -130,13 +154,44 @@ def extension_settings(db: Session = Depends(get_db), user: User = Depends(get_c
 @router.get("/vacancy-known")
 def extension_vacancy_known(
     vacancy_id: str = Query(..., min_length=1, max_length=64),
+    title: str | None = Query(default=None, max_length=512),
+    company_name: str | None = Query(default=None, max_length=512),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
+    def _norm_text(s: str) -> str:
+        t = (s or "").lower().strip()
+        t = re.sub(r"\s+", " ", t)
+        t = re.sub(r"[^\w\s]+", " ", t, flags=re.UNICODE)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    def _norm_company(s: str) -> str:
+        t = _norm_text(s)
+        t = re.sub(r"\b(ооо|оао|зао|пао|ао|ип|llc|inc|ltd|gmbh|sarl|plc)\b", " ", t, flags=re.IGNORECASE)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
     vid = str(vacancy_id).strip()
     exists = db.scalar(select(Application.id).where(Application.user_id == user.id, Application.vacancy_id == vid))
     if exists:
         return {"already_applied": True}
+
+    t_norm = _norm_text(title or "") if title else ""
+    c_norm = _norm_company(company_name or "") if company_name else ""
+    if t_norm and c_norm:
+        rows = db.execute(
+            select(Application.vacancy_name, Application.company_name)
+            .where(Application.user_id == user.id)
+            .order_by(Application.applied_at.desc())
+            .limit(2500)
+        ).all()
+        for vn, cn in rows:
+            if not vn or not cn:
+                continue
+            if _norm_text(str(vn)) == t_norm and _norm_company(str(cn)) == c_norm:
+                return {"already_applied": True}
+
     blacklisted = db.scalar(
         select(BlacklistedVacancy.id).where(
             BlacklistedVacancy.user_id == user.id,
@@ -157,6 +212,29 @@ def extension_generate_letter(
     st = db.get(UserSettings, user.id)
     if not st:
         raise HTTPException(status_code=400, detail="Нет настроек пользователя.")
+
+    # ── Пользовательское письмо (без AI) ──────────────────────────────────
+    mode = (getattr(st, "cover_letter_mode", None) or "ai").strip().lower()
+    if mode == "custom":
+        tpl = (getattr(st, "cover_letter_text", None) or "").strip()
+        if not tpl:
+            raise HTTPException(status_code=400, detail="Выбран режим «своё письмо», но текст письма пустой.")
+
+        mapping = {
+            "{vacancy_title}": body.vacancy_title or "",
+            "{company_name}": body.company_name or "",
+            "{salary_info}": body.salary_info or "",
+            "{key_skills}": body.key_skills or "",
+            "{vacancy_requirements}": body.vacancy_requirements or "",
+        }
+        out = tpl
+        for k, v in mapping.items():
+            out = out.replace(k, v)
+        out = out.strip()
+        if len(out) > 32_000:
+            out = out[:32_000]
+        return ExtensionGenerateLetterOut(letter=out, model_used=None, requests_remaining=None)
+
     if not (st.groq_api_key_enc or "").strip():
         raise HTTPException(status_code=400, detail="Укажите ключ Groq API в настройках HHunter.")
     if not (st.resume_text or "").strip():
@@ -170,12 +248,29 @@ def extension_generate_letter(
         key_skills_text=body.key_skills or "",
         salary_info=body.salary_info or "",
     )
+    # Relevance gate: if too low — return 422 so content script can treat it as "skipped".
+    sc = score_vacancy(body.vacancy_description or "", body.vacancy_title or "")
+    if sc < 3:
+        log_letter_generation(
+            user.id,
+            {
+                "stage": "vacancy_score_skip",
+                "score": sc,
+                "vacancy_title": (body.vacancy_title or "")[:200],
+                "company_name": (body.company_name or "")[:200],
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "low_score", "score": sc, "min_score": 3},
+        )
     try:
         api_key = decrypt_secret(st.groq_api_key_enc or "")
         letter = get_quality_letter(
             vacancy,
             st.resume_text or "",
             api_key,
+            max_retries=2,
             user_id=user.id,
             model=(st.groq_model or None),
         )
@@ -197,7 +292,7 @@ def extension_generate_letter(
                 "model": (st.groq_model or None) or settings.groq_default_model,
             },
         )
-        log_app(user.id, "ERROR", f"Extension generate-letter: {e!s}"[:500], None)
+        log_app(user.id, "ERROR", f"Генерация письма (расширение): {e!s}"[:500], None)
         raise HTTPException(status_code=502, detail=f"Ошибка генерации письма: {e!s}") from e
 
     if not letter.strip():
@@ -322,7 +417,7 @@ def extension_save_application(
         log_app(
             user.id,
             "INFO",
-            f'[ext] "{body.vacancy_title or ""}" — пропуск ({body.skip_reason or "unknown"})',
+            f'[ext] "{body.vacancy_title or ""}" — пропуск ({body.skip_reason or "неизвестно"})',
             None,
         )
     elif body.status == "error":

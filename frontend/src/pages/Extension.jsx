@@ -255,6 +255,11 @@ export default function Extension() {
               python start.py --migrate
             </pre>
             <p className="text-slate-500 text-sm leading-relaxed mt-2">
+              Для пользователей Windows есть “установщик в один клик”:{' '}
+              <code className="text-indigo-300">HHunter-Setup.cmd</code> — он поставит Python/Node (через winget, если нужно),
+              создаст <code className="text-indigo-300">.venv</code>, установит зависимости и запустит проект.
+            </p>
+            <p className="text-slate-500 text-sm leading-relaxed mt-2">
               Режим с перезагрузкой при правках:{' '}
               <code className="text-indigo-300">python start.py --dev --migrate</code>. Фронт по умолчанию на порту{' '}
               <code className="text-indigo-300">5173</code>, API — укажите в переменной окружения{' '}

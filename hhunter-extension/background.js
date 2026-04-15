@@ -65,6 +65,44 @@ function randBetween(a, b) {
   return a + Math.random() * (b - a)
 }
 
+/**
+ * Пока достигнут почасовой лимит на сервере — ждём (опрос раз в pollMs), не останавливая цикл.
+ * @returns {'ok'|'stopped'|'daily_limit'}
+ */
+async function waitUntilHourlySlotAvailable() {
+  const pollMs = 30_000
+  while (true) {
+    const st = await getState()
+    if (!st.running) return 'stopped'
+    let fresh
+    try {
+      fresh = await loadSettings(true)
+    } catch {
+      await sleep(pollMs)
+      continue
+    }
+    const sentToday = parseInt(fresh.settings.sent_today, 10) || 0
+    const sentHour = parseInt(fresh.settings.sent_last_hour, 10) || 0
+    const dailyLimit = Math.min(parseInt(fresh.settings.daily_limit, 10) || 200, 500)
+    const hourlyLimit = Math.min(Math.max(parseInt(fresh.settings.hourly_limit, 10) || 35, 10), 80)
+    if (sentToday >= dailyLimit) return 'daily_limit'
+    if (sentHour < hourlyLimit) return 'ok'
+    await setState({
+      last: {
+        level: 'INFO',
+        message: `Лимит за час (UTC): ${sentHour}/${hourlyLimit}. Ожидание слота — цикл не остановлен, отклики не превысят лимит.`,
+      },
+    })
+    void extActivityLog(
+      'INFO',
+      `Ожидание часового лимита ${sentHour}/${hourlyLimit} (UTC)`,
+      'extension_bg',
+      'full_auto_hourly_wait',
+    )
+    await sleep(pollMs)
+  }
+}
+
 /** Не засыпать БД одинаковыми шагами при частых перезапусках mainLoop (опрос UI, двойные сообщения). */
 const logThrottleAt = new Map()
 const LOG_THROTTLE_MS = {
@@ -74,6 +112,9 @@ const LOG_THROTTLE_MS = {
   active_tab_wrong_host: 14000,
   active_tab_not_vacancy: 14000,
   active_tab_no_tab: 14000,
+  full_auto_hourly_wait: 60_000,
+  full_auto_hourly_limit_wait: 45_000,
+  full_auto_hourly_limit_wait_inline: 45_000,
 }
 
 function logThrottleAllow(step, message) {
@@ -373,12 +414,12 @@ async function runOnceOnActiveTab() {
   }
   await waitTabComplete(tab.id)
   await sleep(180)
-  void extActivityLog('INFO', `Отправка в content script: ${url}`, 'extension_bg', 'active_tab_send')
+  void extActivityLog('INFO', `Отправка в сценарий страницы (content script): ${url}`, 'extension_bg', 'active_tab_send')
   try {
     const r = await tabsSendMessageWithTimeout(tab.id, { type: 'hhunter_run_once', autoSubmit: false }, 180000)
     void extActivityLog(
       'INFO',
-      `Ответ content: ok=${r?.ok} submitted=${r?.submitted} err=${r?.error || '—'}${r?.navigated_recover ? ' · восстановлено после перехода' : ''}${r?.chat_new_tab ? ' · чат в новой вкладке' : ''}`,
+      `Ответ страницы: ok=${r?.ok}, submitted=${r?.submitted}, err=${r?.error || '—'}${r?.navigated_recover ? ' · восстановлено после перехода' : ''}${r?.chat_new_tab ? ' · чат в новой вкладке' : ''}`,
       'extension_bg',
       'active_tab_done',
     )
@@ -411,7 +452,12 @@ async function fullAutoLoop() {
   }
   const search = settings.search || {}
   if (!String(search.search_text || '').trim()) {
-    void extActivityLog('WARNING', 'Нет search_text в сохранённом поиске HHunter', 'extension_bg', 'full_auto_no_search_text')
+    void extActivityLog(
+      'WARNING',
+      'Нет текста поиска (поле search_text) в сохранённых параметрах HHunter',
+      'extension_bg',
+      'full_auto_no_search_text',
+    )
     await setState({
       running: false,
       last: { level: 'WARNING', message: 'Укажите текст поиска в разделе «Поиск» на сайте HHunter.' },
@@ -451,19 +497,26 @@ async function fullAutoLoop() {
       return
     }
     if (sentHour >= hourLim) {
-      void extActivityLog('INFO', `Стоп: лимит за час ${sentHour}/${hourLim}`, 'extension_bg', 'full_auto_hourly_limit')
-      await setState({
-        running: false,
-        last: {
-          level: 'INFO',
-          message: `Лимит откликов за час (UTC): ${sentHour}/${hourLim}. Подождите или увеличьте «за час» в Поиске.`,
-        },
-      })
-      return
+      void extActivityLog(
+        'INFO',
+        `Лимит за час ${sentHour}/${hourLim} — пауза до освобождения слота`,
+        'extension_bg',
+        'full_auto_hourly_limit_wait',
+      )
+      const w = await waitUntilHourlySlotAvailable()
+      if (w === 'stopped') return
+      if (w === 'daily_limit') {
+        void extActivityLog('INFO', `Стоп: дневной лимит UTC при ожидании часа`, 'extension_bg', 'full_auto_limit')
+        await setState({
+          running: false,
+          last: { level: 'INFO', message: `Дневной лимит (UTC) достигнут во время ожидания часового окна.` },
+        })
+        return
+      }
     }
 
     await setState({ last: { level: 'INFO', message: `Выдача: загрузка…` } })
-    void extActivityLog('INFO', `SERP загрузка: ${searchUrl}`, 'extension_bg', 'full_auto_serp_open')
+    void extActivityLog('INFO', `Загрузка выдачи поиска (SERP): ${searchUrl}`, 'extension_bg', 'full_auto_serp_open')
     let tab
     try {
       tab = await chrome.tabs.create({ url: searchUrl, active: false })
@@ -484,7 +537,7 @@ async function fullAutoLoop() {
       collected = inj[0]?.result
     } catch (e) {
       await chrome.tabs.remove(tab.id).catch(() => {})
-      await setState({ last: { level: 'ERROR', message: `Сбор SERP: ${e.message || e}` } })
+      await setState({ last: { level: 'ERROR', message: `Сбор выдачи (SERP): ${e.message || e}` } })
       await sleep(4000)
       continue
     }
@@ -494,7 +547,7 @@ async function fullAutoLoop() {
     const nextHref = collected?.nextHref || null
     void extActivityLog(
       'INFO',
-      `SERP собрано id: ${ids.length}, следующая страница: ${nextHref ? 'да' : 'нет'}`,
+      `Выдача собрана: вакансий ${ids.length}, следующая страница: ${nextHref ? 'да' : 'нет'}`,
       'extension_bg',
       'full_auto_serp_collected',
     )
@@ -543,11 +596,21 @@ async function fullAutoLoop() {
       const sh = parseInt(stFresh.settings.sent_last_hour, 10) || 0
       const hl = Math.min(Math.max(parseInt(stFresh.settings.hourly_limit, 10) || 35, 10), 80)
       if (sh >= hl) {
-        await setState({
-          running: false,
-          last: { level: 'INFO', message: `Лимит за час (UTC) во время цикла: ${sh}/${hl}.` },
-        })
-        return
+        void extActivityLog(
+          'INFO',
+          `Перед вакансией ${vid}: лимит за час ${sh}/${hl} — пауза`,
+          'extension_bg',
+          'full_auto_hourly_limit_wait_inline',
+        )
+        const w = await waitUntilHourlySlotAvailable()
+        if (w === 'stopped') return
+        if (w === 'daily_limit') {
+          await setState({
+            running: false,
+            last: { level: 'INFO', message: `Дневной лимит (UTC) во время цикла.` },
+          })
+          return
+        }
       }
 
       await setState({ last: { level: 'INFO', message: `Вакансия ${vid}…` } })
@@ -566,7 +629,7 @@ async function fullAutoLoop() {
         const r = await tabsSendMessageWithTimeout(vacTab.id, { type: 'hhunter_run_once', autoSubmit: true }, 180000)
         void extActivityLog(
           'INFO',
-          `Вакансия ${vid}: ok=${r?.ok} submitted=${r?.submitted} err=${r?.error || '—'}`,
+          `Вакансия ${vid}: ok=${r?.ok}, submitted=${r?.submitted}, err=${r?.error || '—'}`,
           'extension_bg',
           'full_auto_vacancy_done',
         )
@@ -595,7 +658,7 @@ async function fullAutoLoop() {
             if (blRes && blRes.blacklisted) {
               void extActivityLog(
                 'WARNING',
-                `Вакансия ${vid} добавлена в блэклист после повторных ошибок (channel_closed)`,
+                `Вакансия ${vid} в блэклисте после повторных ошибок (код: channel_closed)`,
                 'extension_bg',
                 'full_auto_blacklist',
               )
@@ -631,7 +694,7 @@ async function fullAutoLoop() {
       void extActivityLog('INFO', 'Переход на следующую страницу выдачи', 'extension_bg', 'full_auto_pager_next')
       searchUrl = nextHref
     } else {
-      void extActivityLog('INFO', 'Конец выдачи (нет pager-next)', 'extension_bg', 'full_auto_end')
+      void extActivityLog('INFO', 'Конец выдачи (нет ссылки «следующая», pager-next)', 'extension_bg', 'full_auto_end')
       await setState({
         running: false,
         last: { level: 'INFO', message: 'Обработана выдача (нет следующей страницы).' },
@@ -646,7 +709,7 @@ async function mainLoop() {
   if (!st0.running) return
   const rm = await chrome.storage.local.get(RUN_MODE_KEY)
   const mode = rm[RUN_MODE_KEY] || 'active_tab'
-  void extActivityLog('INFO', `mainLoop старт: режим ${mode}`, 'extension_bg', 'main_loop_begin')
+  void extActivityLog('INFO', `Старт главного цикла, режим: ${mode}`, 'extension_bg', 'main_loop_begin')
   try {
     if (mode === 'full_auto') {
       await fullAutoLoop()
@@ -654,7 +717,7 @@ async function mainLoop() {
       await runOnceOnActiveTab()
     }
   } catch (e) {
-    void extActivityLog('ERROR', `mainLoop: ${e.message || e}`, 'extension_bg', 'main_loop_error')
+    void extActivityLog('ERROR', `Главный цикл: ${e.message || e}`, 'extension_bg', 'main_loop_error')
     await setState({ last: { level: 'ERROR', message: String(e.message || e) }, running: false })
   } finally {
     // Режим «активная вкладка»: один прогон за нажатие «Запустить», без повторов на той же вакансии.

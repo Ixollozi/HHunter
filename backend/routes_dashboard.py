@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -169,3 +171,74 @@ def dashboard_activity_logs_clear(
     except OperationalError:
         db.rollback()
         return {"ok": True, "deleted": 0}
+
+
+@router.get("/letter-generation-stats")
+def letter_generation_stats(
+    limit: int = 5000,
+    db: Session = Depends(get_db),  # noqa: ARG001 - for auth symmetry / future use
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    Простая статистика по logs/users/user_{id}/letter_generation.jsonl:
+    - сколько писем прошло с 0/1/2 попытки
+    - сколько "сдались" (quality_give_up)
+    - частые причины валидации (validation_message)
+    """
+    lim = max(200, min(int(limit or 5000), 20000))
+    path = Path("logs") / "users" / f"user_{user.id}" / "letter_generation.jsonl"
+    if not path.exists():
+        return {"ok": True, "items": [], "summary": {"total_letters": 0}}
+
+    # Собираем агрегаты по последним lim строкам.
+    lines: list[str] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    lines.append(line)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:300]}
+
+    tail = lines[-lim:]
+    attempt_success: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+    give_up = 0
+    validation_reasons: dict[str, int] = {}
+
+    for raw in tail:
+        try:
+            rec = json.loads(raw)
+        except Exception:
+            continue
+        st = rec.get("stage")
+        if st == "quality_success":
+            a = rec.get("attempt")
+            try:
+                ai = int(a)
+            except Exception:
+                ai = 0
+            attempt_success[ai] = attempt_success.get(ai, 0) + 1
+        elif st == "quality_give_up":
+            give_up += 1
+            msg = str(rec.get("last_validation") or "").strip()
+            if msg:
+                validation_reasons[msg] = validation_reasons.get(msg, 0) + 1
+        elif st == "after_clean_validate":
+            if rec.get("validation_ok") is False:
+                msg = str(rec.get("validation_message") or "").strip()
+                if msg:
+                    validation_reasons[msg] = validation_reasons.get(msg, 0) + 1
+
+    total_letters = sum(attempt_success.values()) + give_up
+    top_reasons = sorted(validation_reasons.items(), key=lambda x: x[1], reverse=True)[:15]
+    return {
+        "ok": True,
+        "summary": {
+            "total_letters": total_letters,
+            "success_by_attempt": attempt_success,
+            "give_up": give_up,
+            "file": str(path),
+            "sampled_lines": len(tail),
+        },
+        "top_validation_reasons": [{"reason": r, "count": c} for r, c in top_reasons],
+    }

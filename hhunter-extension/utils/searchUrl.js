@@ -7,6 +7,18 @@ function buildSearchUrl(search, baseOrigin) {
     .trim()
     .replace(/\/$/, '')
   const s = search || {}
+
+  // Если пользователь задал полный URL выдачи — используем его как приоритет.
+  // Важно: это URL веб-выдачи hh.* (/search/vacancy?...), а не api.hh.ru.
+  const rawUrl = String(s.search_url || '').trim()
+  if (rawUrl) {
+    try {
+      const u = new URL(rawUrl)
+      if (u.protocol === 'https:' || u.protocol === 'http:') return u.href
+    } catch (e) {
+      // ignore and fall back to param builder
+    }
+  }
   const u = new URLSearchParams()
   const text = String(s.search_text || '').trim()
   if (text) u.set('text', text)

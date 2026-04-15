@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from .apply import is_running, stop_background_session
 from .auth import decode_token, get_current_user
 from .deps import get_db
-from .letter_demo import build_letter_demo_payload
+from .letter_demo import build_letter_demo_payload_api, build_letter_demo_payload_web
 from .models import Session as DbSession, UserSettings
 from .ws import manager
 
@@ -19,13 +19,16 @@ router = APIRouter(prefix="/session", tags=["session"])
 @router.post("/letter-demo")
 def letter_demo(db: Session = Depends(get_db), user=Depends(get_current_user)) -> dict[str, Any]:
     """
-    Тест письма: одна случайная вакансия из выдачи hh.ru по вашим параметрам «Поиск» + Gemini. Отклик не выполняется.
+    Тест письма: одна случайная вакансия из выдачи hh.ru по вашим параметрам «Поиск» + Groq. Отклик не выполняется.
     """
     s = db.get(UserSettings, user.id)
     if not s:
         raise HTTPException(status_code=400, detail="Нет настроек пользователя.")
     try:
-        return build_letter_demo_payload(db, user.id, s)
+        try:
+            return build_letter_demo_payload_web(db, user.id, s)
+        except Exception:
+            return build_letter_demo_payload_api(db, user.id, s)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001

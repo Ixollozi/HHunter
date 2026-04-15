@@ -7,6 +7,8 @@ export default function Settings() {
   const [form, setForm] = useState({
     resume_text: '',
     groq_model: 'qwen/qwen3-32b',
+    cover_letter_mode: 'ai',
+    cover_letter_text: '',
   })
   const [groqKeyInput, setGroqKeyInput] = useState('')
   const [groqConfigured, setGroqConfigured] = useState(false)
@@ -32,6 +34,8 @@ export default function Settings() {
     const next = {
       resume_text: data.resume_text || '',
       groq_model: data.groq_model || 'qwen/qwen3-32b',
+      cover_letter_mode: data.cover_letter_mode || 'ai',
+      cover_letter_text: data.cover_letter_text || '',
     }
     setGroqConfigured(!!data.groq_configured)
     lastSavedSettingsJsonRef.current = JSON.stringify(next)
@@ -199,6 +203,28 @@ export default function Settings() {
             <option value="llama-4-scout-instruct">Llama 4 Scout — если нужен более «сухой» деловой тон</option>
             <option value="llama-3.1-8b-instant">Llama 3.1 8B — когда важнее скорость/объём, чем качество письма</option>
           </select>
+
+          <div className="text-sm text-slate-300 flex items-center gap-1 flex-wrap pt-2">
+            Письмо для отклика
+            <Hint title="Можно использовать генерацию (AI) или своё письмо/шаблон. Если выбрать «своё», расширение будет брать текст отсюда и не будет требовать ключ/резюме для генерации." />
+          </div>
+          <select
+            className={field}
+            title="Источник письма для рассылки/откликов"
+            value={form.cover_letter_mode}
+            onChange={(e) => setForm((p) => ({ ...p, cover_letter_mode: e.target.value }))}
+          >
+            <option value="ai">Генерировать (AI)</option>
+            <option value="custom">Использовать своё письмо</option>
+          </select>
+          <textarea
+            className={`${field} min-h-40 resize-y ${form.cover_letter_mode === 'custom' ? '' : 'opacity-60'}`}
+            placeholder="Текст вашего письма. Можно использовать плейсхолдеры: {vacancy_title}, {company_name}, {salary_info}, {key_skills}, {vacancy_requirements}"
+            title="Если выбран режим «своё письмо», текст отсюда будет подставляться в отклик. Поддерживаются простые плейсхолдеры в фигурных скобках."
+            disabled={form.cover_letter_mode !== 'custom'}
+            value={form.cover_letter_text}
+            onChange={(e) => setForm((p) => ({ ...p, cover_letter_text: e.target.value }))}
+          />
 
           <div className="flex flex-wrap gap-2">
             <button

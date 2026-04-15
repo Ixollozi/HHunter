@@ -40,6 +40,16 @@ def init_db() -> None:
                 conn.execute(text("ALTER TABLE search_configs ADD COLUMN search_fields TEXT"))
             if "hourly_limit" not in sc_cols:
                 conn.execute(text("ALTER TABLE search_configs ADD COLUMN hourly_limit INTEGER NOT NULL DEFAULT 35"))
+            if "search_url" not in sc_cols:
+                conn.execute(text("ALTER TABLE search_configs ADD COLUMN search_url TEXT"))
+
+    if "user_settings" in tables:
+        us_cols = {c["name"] for c in insp.get_columns("user_settings")}
+        with engine.begin() as conn:
+            if "cover_letter_mode" not in us_cols:
+                conn.execute(text("ALTER TABLE user_settings ADD COLUMN cover_letter_mode VARCHAR(16)"))
+            if "cover_letter_text" not in us_cols:
+                conn.execute(text("ALTER TABLE user_settings ADD COLUMN cover_letter_text TEXT"))
 
     if "blacklisted_vacancies" not in tables:
         with engine.begin() as conn:

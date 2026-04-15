@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HHunter",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "HHunter: черновик отклика и отправка на HeadHunter (hh.ru и др.) через ваш сайт HHunter.",
   "permissions": ["storage", "tabs", "scripting", "activeTab"],
   "host_permissions": [

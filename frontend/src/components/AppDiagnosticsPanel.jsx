@@ -20,6 +20,7 @@ const SEARCH_LABELS = {
 }
 
 const DIAG_LETTER_KEY = 'hhunter_diag_include_letter'
+const DIAG_LETTER_MODE_KEY = 'hhunter_diag_letter_mode'
 const DIAG_BAR_HIDDEN_KEY = 'hhunter_diag_bar_hidden'
 
 function formatSearchValue(v) {
@@ -53,6 +54,14 @@ export function AppDiagnosticsPanel() {
       return false
     }
   })
+  const [letterMode, setLetterMode] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem(DIAG_LETTER_MODE_KEY)
+      return raw === 'custom' ? 'custom' : 'ai'
+    } catch {
+      return 'ai'
+    }
+  })
 
   useEffect(() => {
     try {
@@ -62,14 +71,24 @@ export function AppDiagnosticsPanel() {
     }
   }, [includeLetterDemo])
 
-  const run = useCallback(async () => {
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(DIAG_LETTER_MODE_KEY, letterMode === 'custom' ? 'custom' : 'ai')
+    } catch {
+      /* ignore */
+    }
+  }, [letterMode])
+
+  const run = useCallback(async ({ includeLetter, mode } = {}) => {
     setErr('')
     setLoading(true)
     setLiveLog([])
     setLiveStep('Запуск…')
     try {
       const token = getToken()
-      const q = includeLetterDemo ? '?include_letter=true' : ''
+      const inc = includeLetter != null ? !!includeLetter : !!includeLetterDemo
+      const m = mode || letterMode || 'ai'
+      const q = inc ? `?include_letter=true${m === 'custom' ? '&letter_mode=custom' : ''}` : ''
       const res = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/diagnostics/run-stream${q}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -109,6 +128,8 @@ export function AppDiagnosticsPanel() {
               ...(prev || {}),
               ...(evt.search_snapshot ? { search_snapshot: evt.search_snapshot } : null),
               ...(evt.vacancy_preview ? { vacancy_preview: evt.vacancy_preview } : null),
+              ...(evt.vacancy_preview_web ? { vacancy_preview_web: evt.vacancy_preview_web } : null),
+              ...(evt.vacancy_preview_api ? { vacancy_preview_api: evt.vacancy_preview_api } : null),
               ...(evt.letter_demo ? { letter_demo: evt.letter_demo } : null),
               ...(evt.check ? { checks: [...((prev?.checks || [])), evt.check] } : null),
             }))
@@ -132,12 +153,21 @@ export function AppDiagnosticsPanel() {
     } finally {
       setLoading(false)
     }
-  }, [includeLetterDemo])
+  }, [includeLetterDemo, letterMode])
 
   function openPanel() {
     setOpen(true)
     setCopied(false)
     run()
+  }
+
+  function openPanelWithCustomLetter() {
+    setOpen(true)
+    setCopied(false)
+    // запускаем без гонок setState
+    setIncludeLetterDemo(true)
+    setLetterMode('custom')
+    run({ includeLetter: true, mode: 'custom' })
   }
 
   function closePanel() {
@@ -179,9 +209,13 @@ export function AppDiagnosticsPanel() {
   }
 
   const letter = data?.letter_demo
-  const vacancy =
+  const vacancyWeb = data?.vacancy_preview_web?.vacancy || null
+  const vacancyApi = data?.vacancy_preview_api?.vacancy || null
+  const vacancyAny =
     data?.vacancy_preview?.vacancy ||
     data?.letter_demo?.vacancy ||
+    vacancyWeb ||
+    vacancyApi ||
     null
   const summaryOk = data?.extra?.summary_ok
   const checks = data?.checks ?? []
@@ -228,14 +262,27 @@ export function AppDiagnosticsPanel() {
               <input
                 type="checkbox"
                 checked={includeLetterDemo}
-                onChange={(e) => setIncludeLetterDemo(e.target.checked)}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  setIncludeLetterDemo(on)
+                  if (on) setLetterMode('ai')
+                }}
                 className="h-4 w-4 shrink-0 rounded border-slate-500 bg-slate-950 accent-indigo-500"
               />
               <span>
-                Сгенерировать демо-письмо
+                Сгенерировать демо-письмо (Groq)
                 <span className="block text-xs font-normal text-slate-500">+1 запрос к Groq, иначе без модели</span>
               </span>
             </label>
+            <button
+              type="button"
+              onClick={openPanelWithCustomLetter}
+              disabled={loading && open}
+              title="Запустить тест и собрать письмо из вашего шаблона (Настройки → «Использовать своё письмо»). Groq не используется."
+              className={`shrink-0 rounded-xl border border-slate-700 bg-slate-900/80 px-4 py-2.5 text-sm font-medium text-slate-200 hover:bg-slate-800/80 disabled:opacity-60 w-full sm:w-auto ${btnNeutral}`}
+            >
+              Использовать своё письмо
+            </button>
             <button
               type="button"
               onClick={openPanel}
@@ -395,42 +442,94 @@ export function AppDiagnosticsPanel() {
                 </div>
               </section>
 
-              {vacancy ? (
-                <section className="rounded-xl border border-slate-700/80 bg-slate-950/60 px-4 py-3 space-y-2">
+              {vacancyAny ? (
+                <section className="rounded-xl border border-slate-700/80 bg-slate-950/60 px-4 py-3 space-y-3">
                   <div className="text-xs font-medium uppercase tracking-wide text-indigo-400/90">
-                    Вакансия с hh.ru (по вашему поиску)
+                    Вакансия с hh (по вашему поиску)
                   </div>
-                  <div className="text-base font-medium text-slate-100">{vacancy.title}</div>
-                  <div className="text-sm text-slate-400">{vacancy.company_name}</div>
-                  {vacancy.hh_url ? (
-                    <a
-                      href={vacancy.hh_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Открыть эту вакансию на hh.ru"
-                      className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-400 hover:text-indigo-300 underline-offset-4 hover:underline"
-                    >
-                      Открыть вакансию на hh.ru
-                      <span aria-hidden className="text-slate-500 text-xs font-normal">
-                        (новая вкладка)
-                      </span>
-                    </a>
-                  ) : null}
-                  <p className="text-sm text-slate-300 leading-relaxed line-clamp-4 sm:line-clamp-none">
-                    {vacancy.description}
-                  </p>
-                  {vacancy.skills?.length ? (
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {vacancy.skills.map((sk) => (
-                        <span
-                          key={sk}
-                          className="rounded-md bg-slate-800/80 px-2 py-0.5 text-xs text-slate-300 border border-slate-700/60"
-                        >
-                          {sk}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
+                  <div className="grid grid-cols-1 gap-3">
+                    {vacancyWeb ? (
+                      <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                        <div className="text-xs text-slate-500 mb-1">Источник: web‑выдача (HTML)</div>
+                        <div className="text-base font-medium text-slate-100">{vacancyWeb.title}</div>
+                        <div className="text-sm text-slate-400">{vacancyWeb.company_name}</div>
+                        {vacancyWeb.hh_url ? (
+                          <a
+                            href={vacancyWeb.hh_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Открыть эту вакансию на hh"
+                            className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-400 hover:text-indigo-300 underline-offset-4 hover:underline mt-1"
+                          >
+                            Открыть вакансию
+                            <span aria-hidden className="text-slate-500 text-xs font-normal">
+                              (новая вкладка)
+                            </span>
+                          </a>
+                        ) : null}
+                        <p className="text-sm text-slate-300 leading-relaxed line-clamp-4 sm:line-clamp-none mt-2">
+                          {vacancyWeb.description}
+                        </p>
+                        {Array.isArray(vacancyWeb.skills) && vacancyWeb.skills.length ? (
+                          <div className="flex flex-wrap gap-1.5 pt-2">
+                            {vacancyWeb.skills.map((sk) => (
+                              <span
+                                key={`w-${sk}`}
+                                className="rounded-md bg-slate-800/80 px-2 py-0.5 text-xs text-slate-300 border border-slate-700/60"
+                              >
+                                {sk}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {vacancyApi ? (
+                      <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                        <div className="text-xs text-slate-500 mb-1">Источник: API hh.ru (резерв)</div>
+                        <div className="text-base font-medium text-slate-100">{vacancyApi.title}</div>
+                        <div className="text-sm text-slate-400">{vacancyApi.company_name}</div>
+                        {vacancyApi.hh_url ? (
+                          <a
+                            href={vacancyApi.hh_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Открыть эту вакансию на hh"
+                            className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-400 hover:text-indigo-300 underline-offset-4 hover:underline mt-1"
+                          >
+                            Открыть вакансию
+                            <span aria-hidden className="text-slate-500 text-xs font-normal">
+                              (новая вкладка)
+                            </span>
+                          </a>
+                        ) : null}
+                        <p className="text-sm text-slate-300 leading-relaxed line-clamp-4 sm:line-clamp-none mt-2">
+                          {vacancyApi.description}
+                        </p>
+                        {Array.isArray(vacancyApi.skills) && vacancyApi.skills.length ? (
+                          <div className="flex flex-wrap gap-1.5 pt-2">
+                            {vacancyApi.skills.map((sk) => (
+                              <span
+                                key={`a-${sk}`}
+                                className="rounded-md bg-slate-800/80 px-2 py-0.5 text-xs text-slate-300 border border-slate-700/60"
+                              >
+                                {sk}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {!vacancyWeb && !vacancyApi && vacancyAny ? (
+                      <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+                        <div className="text-xs text-slate-500 mb-1">Источник: —</div>
+                        <div className="text-base font-medium text-slate-100">{vacancyAny.title}</div>
+                        <div className="text-sm text-slate-400">{vacancyAny.company_name}</div>
+                      </div>
+                    ) : null}
+                  </div>
                 </section>
               ) : null}
 

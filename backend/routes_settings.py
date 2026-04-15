@@ -35,6 +35,8 @@ def get_settings(db: Session = Depends(get_db), user=Depends(get_current_user)) 
         resume_text=s.resume_text,
         groq_model=s.groq_model,
         groq_configured=bool((s.groq_api_key_enc or "").strip()),
+        cover_letter_mode=(s.cover_letter_mode or "ai"),
+        cover_letter_text=s.cover_letter_text,
         search=search,
     )
 
@@ -47,7 +49,7 @@ def put_settings(payload: SettingsIn, db: Session = Depends(get_db), user=Depend
         db.add(s)
         db.flush()
 
-    for field in ["gemini_api_key", "resume_text", "groq_model"]:
+    for field in ["gemini_api_key", "resume_text", "groq_model", "cover_letter_mode", "cover_letter_text"]:
         val = getattr(payload, field)
         if val is not None:
             setattr(s, field, val)

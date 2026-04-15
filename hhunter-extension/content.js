@@ -785,6 +785,16 @@
     })
   }
 
+  /** Человекочитаемое описание ошибки генерации; сырой текст API оставляем как есть. */
+  function ruGenerateLetterLogDetail(detail) {
+    const d = String(detail || '').trim()
+    if (!d) return '(пусто)'
+    if (d === 'Failed to fetch' || /^failed to fetch$/i.test(d)) {
+      return 'Нет сети или сервер недоступен (Failed to fetch)'
+    }
+    return d
+  }
+
   // ─── Chat send helpers ────────────────────────────────────────────────────
 
   async function waitForComposerWithRetries(getter, totalMs) {
@@ -879,7 +889,7 @@
 
     await postExtensionLog(
       apiBase, token, 'INFO',
-      `Предупреждение о стране: кнопка чата найдена, hasHref=${hasHref}, autoSubmit=${autoSubmit}`,
+      `Предупреждение о стране: кнопка чата найдена, есть ссылка (hasHref)=${hasHref}, автоотправка (autoSubmit)=${autoSubmit}`,
       'apply_warning_chat_found',
     )
 
@@ -888,7 +898,11 @@
       // Не кликаем — HH перехватывает и навигирует текущую вкладку.
       // Передаём URL в background, он откроет новую вкладку сам.
       const chatUrl = opener.href
-      await postExtensionLog(apiBase, token, 'INFO', `Чат: передаём URL в background для открытия новой вкладки: ${chatUrl}`, 'apply_warning_chat_bg_open')
+      await postExtensionLog(
+        apiBase, token, 'INFO',
+        `Чат: URL передан во фон расширения (background) для новой вкладки: ${chatUrl}`,
+        'apply_warning_chat_bg_open',
+      )
 
       // Сохраняем отклик до навигации
       try {
@@ -915,7 +929,7 @@
     if (!autoSubmit) {
       await postExtensionLog(
         apiBase, token, 'INFO',
-        'Полуавто + чат без href: клик пропущен (канал оборвётся). Нажмите «Всё равно откликнуться» вручную.',
+        'Полуавто + чат без ссылки (href): клик пропущен (сообщение к фону оборвётся). Нажмите «Всё равно откликнуться» вручную.',
         'apply_semi_warning_no_href_skip',
       )
       return { tried: false }
@@ -929,11 +943,19 @@
     } catch { /* */ }
 
     if (!guardSet) {
-      await postExtensionLog(apiBase, token, 'WARNING', 'nav_guard не сохранён — клик отменён во избежание потери отклика', 'apply_nav_guard_fail')
+      await postExtensionLog(
+        apiBase, token, 'WARNING',
+        'Защита навигации (nav_guard) не сохранена — клик отменён, чтобы не потерять отклик',
+        'apply_nav_guard_fail',
+      )
       return { tried: false }
     }
 
-    await postExtensionLog(apiBase, token, 'INFO', 'Клик по кнопке чата (та же вкладка, nav_guard установлен)', 'apply_chat_same_tab_click')
+    await postExtensionLog(
+      apiBase, token, 'INFO',
+      'Клик по кнопке чата в той же вкладке (nav_guard установлен)',
+      'apply_chat_same_tab_click',
+    )
     opener.click()
     await sleep(600)
 
@@ -948,7 +970,7 @@
     // Вкладка уже перешла или идёт переход — background подхватит через nav_guard
     await postExtensionLog(
       apiBase, token, 'INFO',
-      'Вкладка перешла после клика по чату — background запишет отклик через nav_guard',
+      'Вкладка перешла после клика по чату — отклик подхватит фон (nav_guard)',
       'apply_chat_navigated',
     )
     return { tried: true, ok: true, submitted: true, via_chat: true, navigated: true }
@@ -1029,7 +1051,11 @@
       return { ok: true, submitted: true, letterless: true }
     }
 
-    await postExtensionLog(apiBase, token, 'WARNING', 'Вариант 4: успех не подтверждён по DOM', 'apply_simple_unconfirmed')
+    await postExtensionLog(
+      apiBase, token, 'WARNING',
+      'Вариант 4: успех не подтверждён по разметке страницы (DOM)',
+      'apply_simple_unconfirmed',
+    )
     try {
       await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'error', error_message: 'simple_not_confirmed' })
     } catch { /* */ }
@@ -1045,7 +1071,7 @@
     await postExtensionLog(apiBase, token, 'INFO', 'Текст письма вставлен в форму (вариант 1)', 'apply_form_letter_set')
 
     if (!autoSubmit) {
-      await postExtensionLog(apiBase, token, 'INFO', 'Полуавто: save-application (форма)', 'apply_semi_form_save')
+      await postExtensionLog(apiBase, token, 'INFO', 'Полуавто: запись черновика из формы (save-application)', 'apply_semi_form_save')
       let sa = null
       try {
         sa = await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'sent' })
@@ -1071,7 +1097,11 @@
       try {
         await extensionApi('/extension/blacklist-vacancy', 'POST', { vacancy_id: savePayload.vacancy_id, reason: 'submit_btn_missing' })
       } catch { /* */ }
-      await sendBg({ type: 'report', kind: 'error', last: { level: 'WARNING', message: 'Не найдена кнопка отправки отклика (DOM).' } })
+      await sendBg({
+        type: 'report',
+        kind: 'error',
+        last: { level: 'WARNING', message: 'Не найдена кнопка отправки отклика по разметке страницы (DOM).' },
+      })
       return { ok: true, submitted: false, error: 'submit_button_missing' }
     }
 
@@ -1093,7 +1123,11 @@
 
     const success = await waitApplySuccess(10000)
     if (!success) {
-      await postExtensionLog(apiBase, token, 'WARNING', 'Успех формы не подтверждён по DOM', 'apply_form_success_timeout')
+      await postExtensionLog(
+        apiBase, token, 'WARNING',
+        'Успех формы не подтверждён по разметке страницы (DOM)',
+        'apply_form_success_timeout',
+      )
       let sae = null
       try {
         sae = await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'error', error_message: 'submit_not_confirmed' })
@@ -1137,26 +1171,42 @@
       return { ok: false, error: 'captcha' }
     }
     if (pageKind() !== 'vacancy') {
-      await postExtensionLog(apiBase, token, 'WARNING', 'Страница не /vacancy/{id}', 'apply_not_vacancy')
+      await postExtensionLog(
+        apiBase, token, 'WARNING',
+        'Страница не вакансия (ожидается путь /vacancy/{id})',
+        'apply_not_vacancy',
+      )
       await sendBg({ type: 'report', last: { level: 'INFO', message: 'Нужна страница вакансии hh.ru/vacancy/{id}' } })
       return { ok: false, error: 'not_vacancy' }
     }
 
     const payload = collectVacancyFromPage()
     if (!payload.vacancy_title || !payload.vacancy_description) {
-      await postExtensionLog(apiBase, token, 'WARNING', `Парсинг DOM неполный id=${payload.vacancy_id}`, 'apply_parse_dom')
-      await sendBg({ type: 'report', kind: 'skipped', last: { level: 'WARNING', message: 'Не удалось считать вакансию из DOM' } })
+      await postExtensionLog(
+        apiBase, token, 'WARNING',
+        `Разметка страницы неполная (DOM), id=${payload.vacancy_id}`,
+        'apply_parse_dom',
+      )
+      await sendBg({
+        type: 'report',
+        kind: 'skipped',
+        last: { level: 'WARNING', message: 'Не удалось считать вакансию по разметке страницы (DOM)' },
+      })
       return { ok: false, error: 'parse_dom' }
     }
 
     if (!token) {
-      await sendBg({ type: 'report', kind: 'error', last: { level: 'ERROR', message: 'Нет JWT. Откройте сайт HHunter, нажмите «Токен с сайта».' } })
+      await sendBg({
+        type: 'report',
+        kind: 'error',
+        last: { level: 'ERROR', message: 'Нет токена (JWT). Откройте сайт HHunter, нажмите «Токен с сайта».' },
+      })
       return { ok: false, error: 'no_token' }
     }
 
     await postExtensionLog(
       apiBase, token, 'INFO',
-      `Старт autoSubmit=${autoSubmit} vacancy=${payload.vacancy_id} · ${payload.vacancy_title.slice(0, 100)}`,
+      `Старт отклика: автоотправка (autoSubmit)=${autoSubmit}, вакансия id=${payload.vacancy_id} · ${payload.vacancy_title.slice(0, 100)}`,
       'apply_start',
     )
 
@@ -1180,18 +1230,49 @@
       })
     } catch (e) {
       const detail = String((e && e.message) || e) || 'Failed to fetch'
-      await postExtensionLog(apiBase, token, 'ERROR', `generate-letter: ${detail}`, 'apply_generate_fail')
-      await sendBg({ type: 'report', kind: 'error', stop_loop: false, last: { level: 'ERROR', message: `generate-letter: ${detail}` } })
+      const ru = ruGenerateLetterLogDetail(detail)
+      await postExtensionLog(apiBase, token, 'ERROR', `Генерация письма: ${ru}`, 'apply_generate_fail')
+      await sendBg({ type: 'report', kind: 'error', stop_loop: false, last: { level: 'ERROR', message: `Генерация письма: ${ru}` } })
       return { ok: false, error: detail }
     }
 
     const data = res.data && typeof res.data === 'object' ? res.data : {}
     if (!res.ok) {
+      // Нерелевантная вакансия — мягкий пропуск без расхода токенов и без ошибки
+      if (res.status === 422 && data && data.detail && data.detail.code === 'low_score') {
+        const sc = data.detail.score
+        await postExtensionLog(
+          apiBase,
+          token,
+          'INFO',
+          `Пропуск: вакансия нерелевантна (score=${sc}, min=3)`,
+          'apply_low_score_skip',
+        )
+        try {
+          await extensionApi('/extension/save-application', 'POST', {
+            vacancy_id: payload.vacancy_id || payload.vacancy_url,
+            vacancy_title: payload.vacancy_title,
+            vacancy_url: payload.vacancy_url,
+            company_name: payload.company_name || null,
+            status: 'skipped',
+            skip_reason: 'low_score',
+            error_message: null,
+          })
+        } catch { /* */ }
+        await sendBg({ type: 'report', kind: 'skipped', last: { level: 'INFO', message: `Пропущено (нерелевантно): ${payload.vacancy_title}` } })
+        return { ok: true, submitted: false, error: 'low_score', skipped: true }
+      }
       const detail = data?.detail || `HTTP ${res.status}`
       let extra = ''
       if (res.status === 429) extra = ' (лимит откликов на сервере)'
-      await postExtensionLog(apiBase, token, 'ERROR', `generate-letter: ${detail}${extra}`, 'apply_generate_fail')
-      await sendBg({ type: 'report', kind: 'error', stop_loop: res.status === 429, last: { level: 'ERROR', message: `generate-letter: ${detail}${extra}` } })
+      const ru = ruGenerateLetterLogDetail(detail)
+      await postExtensionLog(apiBase, token, 'ERROR', `Генерация письма: ${ru}${extra}`, 'apply_generate_fail')
+      await sendBg({
+        type: 'report',
+        kind: 'error',
+        stop_loop: res.status === 429,
+        last: { level: 'ERROR', message: `Генерация письма: ${ru}${extra}` },
+      })
       return { ok: false, error: String(detail) }
     }
 
@@ -1216,7 +1297,7 @@
     // ── Открываем форму отклика ──────────────────────────────────────────
     // Сначала проверяем текущее состояние до клика
     let ui = detectApplyUiState()
-    await postExtensionLog(apiBase, token, 'INFO', `Состояние до открытия формы: ${ui}`, 'apply_pre_open_state')
+    await postExtensionLog(apiBase, token, 'INFO', `Состояние до открытия формы (режим): ${ui}`, 'apply_pre_open_state')
 
     if (ui === 'none') {
       // Ищем и кликаем кнопку открытия формы
@@ -1238,7 +1319,7 @@
       ui = await waitForApplyUiState(22000, 170)
     }
 
-    await postExtensionLog(apiBase, token, 'INFO', `Состояние UI: ${ui}`, 'apply_ui_state')
+    await postExtensionLog(apiBase, token, 'INFO', `Состояние интерфейса (режим): ${ui}`, 'apply_ui_state')
 
     // ════════════════════════════════════════════════════════════════════
     // ВАРИАНТ 2: Чат сразу после открытия (вместо формы)
@@ -1264,7 +1345,11 @@
       const chatResult = await handleCountryWarningChatPath(letter, apiBase, token, savePayload, autoSubmit)
       if (chatResult.tried) {
         if (chatResult.ok) return chatResult
-        await postExtensionLog(apiBase, token, 'WARNING', `Чат-путь не сработал: ${chatResult.error || 'unknown'}`, 'apply_warning_chat_failed')
+        await postExtensionLog(
+          apiBase, token, 'WARNING',
+          `Чат-путь не сработал: ${chatResult.error || 'неизвестно'}`,
+          'apply_warning_chat_failed',
+        )
       }
 
       // Fallback: нажимаем «Всё равно откликнуться» и ждём форму
@@ -1313,13 +1398,13 @@
     }
 
     if (ta && visibleElement(ta)) {
-      await postExtensionLog(apiBase, token, 'INFO', 'Вариант 1: форма с textarea', 'apply_variant1')
+      await postExtensionLog(apiBase, token, 'INFO', 'Вариант 1: форма с полем письма (textarea)', 'apply_variant1')
       return handleFormWithLetter(ta, letter, apiBase, token, savePayload, autoSubmit)
     }
 
     // ── Финальный fallback: ещё раз проверяем текущий ui ───────────────
     const uiFinal = detectApplyUiState()
-    await postExtensionLog(apiBase, token, 'INFO', `Финальный ui: ${uiFinal}`, 'apply_final_ui')
+    await postExtensionLog(apiBase, token, 'INFO', `Финальное состояние интерфейса (режим): ${uiFinal}`, 'apply_final_ui')
 
     if (uiFinal === 'chat') {
       if (!autoSubmit) {
@@ -1346,7 +1431,11 @@
     }
 
     // Совсем ничего не нашли
-    await postExtensionLog(apiBase, token, 'WARNING', 'Textarea не появилась и UI не определён за время ожидания', 'apply_textarea_timeout')
+    await postExtensionLog(
+      apiBase, token, 'WARNING',
+      'Поле письма (textarea) не появилось, тип интерфейса не определён за время ожидания',
+      'apply_textarea_timeout',
+    )
 
     if (!autoSubmit) {
       let sa = null
@@ -1360,7 +1449,7 @@
       await sendBg({
         type: 'report',
         kind: 'sent',
-        last: { level: 'INFO', message: `Черновик (UI не определён): ${savePayload.vacancy_title}` },
+        last: { level: 'INFO', message: `Черновик (интерфейс не распознан): ${savePayload.vacancy_title}` },
       })
       return { ok: true, submitted: false }
     }
@@ -1372,7 +1461,11 @@
     try {
       await extensionApi('/extension/blacklist-vacancy', 'POST', { vacancy_id: savePayload.vacancy_id, reason: 'ui_not_detected' })
     } catch { /* */ }
-    await sendBg({ type: 'report', kind: 'error', last: { level: 'WARNING', message: 'UI формы не определён — вакансия добавлена в блэклист.' } })
+    await sendBg({
+      type: 'report',
+      kind: 'error',
+      last: { level: 'WARNING', message: 'Интерфейс формы не распознан — вакансия добавлена в блэклист.' },
+    })
     return { ok: true, submitted: false, error: 'ui_not_detected' }
   }
 

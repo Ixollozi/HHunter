@@ -31,6 +31,8 @@ BACKEND_DIR = ROOT / "backend"
 FRONTEND_DIR = ROOT / "frontend"
 DATABASE_DIR = ROOT / "database"
 
+
+
 # Файлы фронта, при изменении которых нужен npm run build (режим preview).
 _FRONTEND_ROOT_WATCH = (
     "vite.config.js",

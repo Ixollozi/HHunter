@@ -37,6 +37,7 @@ def search_config_dict_from_row(cfg: Any) -> dict[str, Any]:
         "salary": cfg.salary,
         "only_with_salary": bool(getattr(cfg, "only_with_salary", False)),
         "order_by": getattr(cfg, "order_by", None),
+        "search_url": getattr(cfg, "search_url", None),
         "delay_min": cfg.delay_min,
         "delay_max": cfg.delay_max,
         "daily_limit": cfg.daily_limit,

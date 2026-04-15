@@ -62,12 +62,13 @@ const TOP_AREAS = [
   { id: '88', name: 'Казань' },
   { id: '97', name: 'Уфа' },
   { id: '54', name: 'Краснодар' },
-  { id: '2748', name: 'Ташкент' },
+  { id: '2759', name: 'Ташкент' },
 ]
 
 function defaultForm() {
   return {
     search_text: '',
+    search_url: '',
     search_fields: [...DEFAULT_SEARCH_FIELDS],
     area: '',
     experience: '',
@@ -86,6 +87,7 @@ function defaultForm() {
 
 function normalizeLoadedSearch(s) {
   const base = { ...defaultForm(), ...s }
+  base.search_url = base.search_url != null ? String(base.search_url) : ''
   if (s.search_fields == null || !Array.isArray(s.search_fields)) {
     base.search_fields = [...DEFAULT_SEARCH_FIELDS]
   } else {
@@ -115,6 +117,7 @@ function buildSearchPayload(f) {
     f.salary === '' || f.salary === null || f.salary === undefined ? null : Number(f.salary)
   return {
     search_text: f.search_text || null,
+    search_url: f.search_url && String(f.search_url).trim() ? String(f.search_url).trim() : null,
     search_fields: Array.isArray(f.search_fields) ? f.search_fields : [],
     area: f.area || null,
     experience: f.experience || null,
@@ -320,6 +323,30 @@ export default function Search() {
               value={form.search_text || ''}
               onChange={(e) => setForm((p) => ({ ...p, search_text: e.target.value }))}
             />
+          </label>
+
+          <label className="block space-y-1">
+            <span className="text-sm text-slate-400 flex items-center gap-2">
+              Ссылка на выдачу (URL)
+              <Hint title="Если заполнено — расширение/тест будут использовать эту ссылку как приоритетную (например tashkent.hh.uz/search/vacancy?...). Оставьте пустым, чтобы URL собирался из полей ниже." />
+            </span>
+            <input
+              className={field}
+              placeholder="Например: https://tashkent.hh.uz/search/vacancy?text=python&area=2759"
+              title="Приоритетный URL выдачи. Можно скопировать из адресной строки браузера."
+              value={form.search_url || ''}
+              onChange={(e) => setForm((p) => ({ ...p, search_url: e.target.value }))}
+            />
+            {String(form.search_url || '').trim() ? (
+              <button
+                type="button"
+                className={`w-fit ${btnNeutral} text-slate-300`}
+                onClick={() => setForm((p) => ({ ...p, search_url: '' }))}
+                title="Очистить URL и вернуться к сборке ссылки из фильтров ниже."
+              >
+                Очистить URL
+              </button>
+            ) : null}
           </label>
 
           <fieldset className="space-y-2">

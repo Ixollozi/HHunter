@@ -36,6 +36,11 @@ class UserSettings(Base):
     resume_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     groq_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     groq_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cover_letter_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """Источник письма: 'ai' (по умолчанию) или 'custom'."""
+
+    cover_letter_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Своё письмо/шаблон для расширения (если cover_letter_mode='custom')."""
 
     user: Mapped[User] = relationship(back_populates="settings")
 
@@ -57,6 +62,8 @@ class SearchConfig(Base):
     salary: Mapped[int | None] = mapped_column(Integer, nullable=True)
     only_with_salary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     order_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Если задано — приоритетный URL выдачи (например tashkent.hh.uz/search/vacancy?...).
+    search_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     delay_min: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     delay_max: Mapped[int] = mapped_column(Integer, default=4, nullable=False)

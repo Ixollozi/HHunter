@@ -6,6 +6,18 @@ import { btnNeutral, btnPrimary, field, fieldInline, link } from '../ui/hover'
 
 const HH_VACANCY_BASE = 'https://hh.ru/vacancy'
 
+/** В таблице всегда: «Название(123456)»; без дубля, если в названии уже есть (123456) в конце. */
+function formatVacancyTitleWithId(r) {
+  const id = r.vacancy_id != null && String(r.vacancy_id).trim() !== '' ? String(r.vacancy_id).trim() : ''
+  let name = (r.vacancy_name || '').trim()
+  if (!id) return name || '—'
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const suffix = new RegExp(`\\s*\\(${escaped}\\)\\s*$`)
+  name = name.replace(suffix, '').trim()
+  if (!name || name === `Вакансия ${id}`) return `Вакансия(${id})`
+  return `${name}(${id})`
+}
+
 export default function Results() {
   const [items, setItems] = useState([])
   const [blacklistExtra, setBlacklistExtra] = useState([])
@@ -189,10 +201,10 @@ export default function Results() {
                       <td className="p-2">
                         {href ? (
                           <a className={link} href={href} target="_blank" rel="noopener noreferrer">
-                            {r.vacancy_name || r.vacancy_id}
+                            {formatVacancyTitleWithId(r)}
                           </a>
                         ) : (
-                          <span>{r.vacancy_name || r.vacancy_id}</span>
+                          <span>{formatVacancyTitleWithId(r)}</span>
                         )}
                       </td>
                       <td className="p-2 text-slate-400">{r.error_message || ''}</td>
@@ -257,12 +269,12 @@ export default function Results() {
                       href={vacancyHref}
                       target="_blank"
                       rel="noopener noreferrer"
-                      title="Открыть вакансию на hh.ru в новой вкладке."
+                      title="Открыть вакансию на HeadHunter в новой вкладке."
                     >
-                      {r.vacancy_name || r.vacancy_id}
+                      {formatVacancyTitleWithId(r)}
                     </a>
                   ) : (
-                    <span>{r.vacancy_name || r.vacancy_id}</span>
+                    <span>{formatVacancyTitleWithId(r)}</span>
                   )}
                 </td>
                 <td className="p-3 text-slate-300">{r.company_name || ''}</td>

@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 
 from .auth import get_current_user
 from .deps import get_db
-from .letter_demo import build_letter_demo_payload, build_vacancy_preview_payload
+from .letter_demo import (
+    build_letter_demo_payload_api,
+    build_letter_demo_payload_web,
+    build_vacancy_preview_payload_api,
+    build_vacancy_preview_payload_web,
+)
 from .models import Application, SearchConfig, Session as DbSession, User, UserSettings
 from .search_params import search_config_dict_from_row
 
@@ -27,6 +32,10 @@ def run_diagnostics_stream(
     include_letter: bool = Query(
         default=False,
         description="Если true — один запрос к Groq для демо-письма. По умолчанию выкл., чтобы не расходовать квоту.",
+    ),
+    letter_mode: str = Query(
+        default="ai",
+        description="Режим письма для демо: 'ai' (Groq) или 'custom' (своё письмо из настроек, без Groq).",
     ),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -66,6 +75,8 @@ def run_diagnostics_stream(
         )
         yield emit("check", {"check": checks[-1]})
 
+        mode = str(letter_mode or "ai").strip().lower()
+        force_custom = mode == "custom"
         groq_ok = bool(s and (s.groq_api_key_enc or "").strip())
         resume_ok = bool(s and (s.resume_text or "").strip())
         resume_len = len((s.resume_text or "").strip()) if s else 0
@@ -73,9 +84,14 @@ def run_diagnostics_stream(
         checks.append(
             {
                 "id": "groq_key",
-                "ok": groq_ok,
+                "ok": True if force_custom else groq_ok,
+                "skipped": True if force_custom else False,
                 "label": "Ключ Groq в настройках",
-                "detail": "Заполнено" if groq_ok else "Раздел «Настройки» → Groq API key",
+                "detail": (
+                    "Пропущено: выбран режим «своё письмо»"
+                    if force_custom
+                    else ("Заполнено" if groq_ok else "Раздел «Настройки» → Groq API key")
+                ),
             }
         )
         yield emit("check", {"check": checks[-1]})
@@ -83,9 +99,14 @@ def run_diagnostics_stream(
         checks.append(
             {
                 "id": "resume_text",
-                "ok": resume_ok,
+                "ok": True if force_custom else resume_ok,
+                "skipped": True if force_custom else False,
                 "label": "Текст резюме",
-                "detail": f"{resume_len} симв." if resume_ok else "Вставьте текст или загрузите PDF",
+                "detail": (
+                    "Пропущено: выбран режим «своё письмо»"
+                    if force_custom
+                    else (f"{resume_len} симв." if resume_ok else "Вставьте текст или загрузите PDF")
+                ),
             }
         )
         yield emit("check", {"check": checks[-1]})
@@ -138,7 +159,7 @@ def run_diagnostics_stream(
             {
                 "id": "search_text_hh",
                 "ok": search_text_ok,
-                "label": "Текст поиска для hh.ru",
+                "label": "Текст поиска",
                 "detail": (
                     f"«{(cfg.search_text or '').strip()[:80]}{'…' if len((cfg.search_text or '').strip()) > 80 else ''}»"
                     if search_text_ok
@@ -148,26 +169,28 @@ def run_diagnostics_stream(
         )
         yield emit("check", {"check": checks[-1]})
 
-        # vacancy preview
-        yield emit("step", {"message": "Запрашиваем вакансию с hh.ru по вашему поиску…"})
+        # vacancy preview (primary: web SERP)
+        yield emit("step", {"message": "Ищем вакансию через веб‑выдачу hh.ru (HTML)…"})
+        vacancy_preview_web = None
+        vacancy_preview_api = None
         if search_ok and search_text_ok:
             try:
-                vacancy_preview = build_vacancy_preview_payload(db, user.id)
+                vacancy_preview_web = build_vacancy_preview_payload_web(db, user.id)
                 checks.append(
                     {
-                        "id": "hh_vacancy_preview",
+                        "id": "hh_web_vacancy_preview",
                         "ok": True,
-                        "label": "hh.ru: вакансия из вашего поиска",
-                        "detail": "Получено из API hh.ru",
+                        "label": "hh.ru web: вакансия из выдачи",
+                        "detail": "Получено из веб‑выдачи (HTML)",
                     }
                 )
-                yield emit("check", {"check": checks[-1], "vacancy_preview": vacancy_preview})
+                yield emit("check", {"check": checks[-1], "vacancy_preview_web": vacancy_preview_web})
             except Exception as e:  # noqa: BLE001
                 checks.append(
                     {
-                        "id": "hh_vacancy_preview",
+                        "id": "hh_web_vacancy_preview",
                         "ok": False,
-                        "label": "hh.ru: вакансия из вашего поиска",
+                        "label": "hh.ru web: вакансия из выдачи",
                         "detail": str(e)[:500],
                     }
                 )
@@ -175,14 +198,72 @@ def run_diagnostics_stream(
         else:
             checks.append(
                 {
-                    "id": "hh_vacancy_preview",
+                    "id": "hh_web_vacancy_preview",
                     "ok": False,
                     "skipped": True,
-                    "label": "hh.ru: вакансия из вашего поиска",
+                    "label": "hh.ru web: вакансия из выдачи",
                     "detail": "Пропущено: нужен сохранённый поиск и текст запроса",
                 }
             )
             yield emit("check", {"check": checks[-1]})
+
+        # reserve: api.hh.ru
+        yield emit("step", {"message": "Резервная проверка: ищем вакансию через API hh.ru…"})
+        if search_ok and search_text_ok:
+            try:
+                vacancy_preview_api = build_vacancy_preview_payload_api(db, user.id)
+                checks.append(
+                    {
+                        "id": "hh_api_vacancy_preview",
+                        "ok": True,
+                        "label": "hh.ru API: вакансия из поиска",
+                        "detail": "Получено из api.hh.ru",
+                    }
+                )
+                yield emit("check", {"check": checks[-1], "vacancy_preview_api": vacancy_preview_api})
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)[:500]
+                # 403 forbidden у hh.ru API — частый случай; не ломаем основной сценарий (web уже проверен выше)
+                if "hh.ru API ответил с кодом 403" in msg and '"type":"forbidden"' in msg.replace(" ", ""):
+                    msg = (
+                        "hh.ru API вернул 403 forbidden (ограничение HeadHunter). Это не влияет на web‑поиск/расширение. "
+                        "Можно настроить HH_API_USER_AGENT в backend/.env и попробовать другую сеть."
+                    )
+                    checks.append(
+                        {
+                            "id": "hh_api_vacancy_preview",
+                            "ok": True,
+                            "skipped": True,
+                            "label": "hh.ru API: вакансия из поиска",
+                            "detail": msg,
+                        }
+                    )
+                    yield emit("check", {"check": checks[-1]})
+                else:
+                    checks.append(
+                        {
+                            "id": "hh_api_vacancy_preview",
+                            "ok": False,
+                            "label": "hh.ru API: вакансия из поиска",
+                            "detail": msg,
+                        }
+                    )
+                    yield emit("check", {"check": checks[-1]})
+        else:
+            checks.append(
+                {
+                    "id": "hh_api_vacancy_preview",
+                    "ok": False,
+                    "skipped": True,
+                    "label": "hh.ru API: вакансия из поиска",
+                    "detail": "Пропущено: нужен сохранённый поиск и текст запроса",
+                }
+            )
+            yield emit("check", {"check": checks[-1]})
+
+        # Для финального payload оставляем "главную" превьюшку как web (если есть),
+        # чтобы UI мог показывать единообразно.
+        vacancy_preview = vacancy_preview_web or vacancy_preview_api
 
         # AI letter (optional; Groq quota — only when include_letter=true)
         if not include_letter:
@@ -196,16 +277,30 @@ def run_diagnostics_stream(
                 }
             )
             yield emit("check", {"check": checks[-1]})
-        elif s and groq_ok and resume_ok:
-            yield emit("step", {"message": "Генерируем письмо через Groq… (это может занять 3–20 сек)"})
+        elif s and (force_custom or (groq_ok and resume_ok)):
+            yield emit(
+                "step",
+                {
+                    "message": (
+                        "Собираем письмо из вашего шаблона…"
+                        if force_custom
+                        else "Генерируем письмо через Groq… (это может занять 3–20 сек)"
+                    )
+                },
+            )
             try:
-                letter_demo = build_letter_demo_payload(db, user.id, s)
+                # Основной: web
+                try:
+                    letter_demo = build_letter_demo_payload_web(db, user.id, s, force_custom=force_custom)
+                except Exception:
+                    # Резерв: api.hh.ru (чисто чтобы не ломать тест)
+                    letter_demo = build_letter_demo_payload_api(db, user.id, s, force_custom=force_custom)
                 checks.append(
                     {
                         "id": "ai_letter_demo",
                         "ok": True,
-                        "label": "AI: письмо к вакансии с hh.ru",
-                        "detail": "Сгенерировано по вашему поиску",
+                        "label": "Письмо к вакансии с hh.ru",
+                        "detail": "Собрано из шаблона" if force_custom else "Сгенерировано по вашему поиску (Groq)",
                     }
                 )
                 yield emit("check", {"check": checks[-1], "letter_demo": letter_demo})
@@ -254,6 +349,8 @@ def run_diagnostics_stream(
             "checks": checks,
             "letter_demo": letter_demo,
             "vacancy_preview": vacancy_preview,
+            "vacancy_preview_web": vacancy_preview_web,
+            "vacancy_preview_api": vacancy_preview_api,
             "search_snapshot": search_snapshot,
             "extra": extra,
         }
@@ -265,6 +362,7 @@ def run_diagnostics_stream(
 @router.post("/run")
 def run_diagnostics(
     include_letter: bool = Query(default=False),
+    letter_mode: str = Query(default="ai"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -288,6 +386,8 @@ def run_diagnostics(
         }
     )
 
+    mode = str(letter_mode or "ai").strip().lower()
+    force_custom = mode == "custom"
     groq_ok = bool(s and (s.groq_api_key_enc or "").strip())
     resume_ok = bool(s and (s.resume_text or "").strip())
     resume_len = len((s.resume_text or "").strip()) if s else 0
@@ -295,17 +395,27 @@ def run_diagnostics(
     checks.append(
         {
             "id": "groq_key",
-            "ok": groq_ok,
+            "ok": True if force_custom else groq_ok,
+            "skipped": True if force_custom else False,
             "label": "Ключ Groq в настройках",
-            "detail": "Заполнено" if groq_ok else "Раздел «Настройки» → Groq API key",
+            "detail": (
+                "Пропущено: выбран режим «своё письмо»"
+                if force_custom
+                else ("Заполнено" if groq_ok else "Раздел «Настройки» → Groq API key")
+            ),
         }
     )
     checks.append(
         {
             "id": "resume_text",
-            "ok": resume_ok,
+            "ok": True if force_custom else resume_ok,
+            "skipped": True if force_custom else False,
             "label": "Текст резюме",
-            "detail": f"{resume_len} симв." if resume_ok else "Вставьте текст или загрузите PDF",
+            "detail": (
+                "Пропущено: выбран режим «своё письмо»"
+                if force_custom
+                else (f"{resume_len} симв." if resume_ok else "Вставьте текст или загрузите PDF")
+            ),
         }
     )
 
@@ -354,7 +464,7 @@ def run_diagnostics(
         {
             "id": "search_text_hh",
             "ok": search_text_ok,
-            "label": "Текст поиска для hh.ru",
+            "label": "Текст поиска",
             "detail": (
                 f"«{(cfg.search_text or '').strip()[:80]}{'…' if len((cfg.search_text or '').strip()) > 80 else ''}»"
                 if search_text_ok
@@ -363,37 +473,84 @@ def run_diagnostics(
         }
     )
 
-    # Вакансия из вашего поиска — показываем даже если AI не настроен
+    vacancy_preview_web = None
+    vacancy_preview_api = None
     if search_ok and search_text_ok:
         try:
-            vacancy_preview = build_vacancy_preview_payload(db, user.id)
+            vacancy_preview_web = build_vacancy_preview_payload_web(db, user.id)
             checks.append(
                 {
-                    "id": "hh_vacancy_preview",
+                    "id": "hh_web_vacancy_preview",
                     "ok": True,
-                    "label": "hh.ru: вакансия из вашего поиска",
-                    "detail": "Получено из API hh.ru",
+                    "label": "hh.ru web: вакансия из выдачи",
+                    "detail": "Получено из веб‑выдачи (HTML)",
                 }
             )
         except Exception as e:  # noqa: BLE001
             checks.append(
                 {
-                    "id": "hh_vacancy_preview",
+                    "id": "hh_web_vacancy_preview",
                     "ok": False,
-                    "label": "hh.ru: вакансия из вашего поиска",
+                    "label": "hh.ru web: вакансия из выдачи",
                     "detail": str(e)[:500],
                 }
             )
+        try:
+            vacancy_preview_api = build_vacancy_preview_payload_api(db, user.id)
+            checks.append(
+                {
+                    "id": "hh_api_vacancy_preview",
+                    "ok": True,
+                    "label": "hh.ru API: вакансия из поиска",
+                    "detail": "Получено из api.hh.ru",
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)[:500]
+            if "hh.ru API ответил с кодом 403" in msg and '"type":"forbidden"' in msg.replace(" ", ""):
+                msg = (
+                    "hh.ru API вернул 403 forbidden (ограничение HeadHunter). Это не влияет на web‑поиск/расширение. "
+                    "Можно настроить HH_API_USER_AGENT в backend/.env и попробовать другую сеть."
+                )
+                checks.append(
+                    {
+                        "id": "hh_api_vacancy_preview",
+                        "ok": True,
+                        "skipped": True,
+                        "label": "hh.ru API: вакансия из поиска",
+                        "detail": msg,
+                    }
+                )
+            else:
+                checks.append(
+                    {
+                        "id": "hh_api_vacancy_preview",
+                        "ok": False,
+                        "label": "hh.ru API: вакансия из поиска",
+                        "detail": msg,
+                    }
+                )
     else:
         checks.append(
             {
-                "id": "hh_vacancy_preview",
+                "id": "hh_web_vacancy_preview",
                 "ok": False,
                 "skipped": True,
-                "label": "hh.ru: вакансия из вашего поиска",
+                "label": "hh.ru web: вакансия из выдачи",
                 "detail": "Пропущено: нужен сохранённый поиск и текст запроса",
             }
         )
+        checks.append(
+            {
+                "id": "hh_api_vacancy_preview",
+                "ok": False,
+                "skipped": True,
+                "label": "hh.ru API: вакансия из поиска",
+                "detail": "Пропущено: нужен сохранённый поиск и текст запроса",
+            }
+        )
+
+    vacancy_preview = vacancy_preview_web or vacancy_preview_api
 
     if not include_letter:
         checks.append(
@@ -405,15 +562,18 @@ def run_diagnostics(
                 "detail": "Пропущено: передайте include_letter=true для одного запроса к Groq",
             }
         )
-    elif s and groq_ok and resume_ok:
+    elif s and (force_custom or (groq_ok and resume_ok)):
         try:
-            letter_demo = build_letter_demo_payload(db, user.id, s)
+            try:
+                letter_demo = build_letter_demo_payload_web(db, user.id, s, force_custom=force_custom)
+            except Exception:
+                letter_demo = build_letter_demo_payload_api(db, user.id, s, force_custom=force_custom)
             checks.append(
                 {
                     "id": "ai_letter_demo",
                     "ok": True,
-                    "label": "AI: письмо к вакансии с hh.ru",
-                    "detail": "Сгенерировано по вашему поиску",
+                    "label": "Письмо к вакансии с hh.ru",
+                    "detail": "Собрано из шаблона" if force_custom else "Сгенерировано по вашему поиску (Groq)",
                 }
             )
             if not letter_demo.get("validation_ok"):
@@ -458,6 +618,8 @@ def run_diagnostics(
         "checks": checks,
         "letter_demo": letter_demo,
         "vacancy_preview": vacancy_preview,
+        "vacancy_preview_web": vacancy_preview_web,
+        "vacancy_preview_api": vacancy_preview_api,
         "search_snapshot": search_snapshot,
         "extra": extra,
     }

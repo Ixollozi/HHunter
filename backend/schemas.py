@@ -50,6 +50,7 @@ class SearchConfigIn(BaseModel):
     salary: int | None = None
     only_with_salary: bool | None = None
     order_by: str | None = None
+    search_url: str | None = Field(default=None, max_length=4096)
     delay_min: int | None = None
     delay_max: int | None = None
     daily_limit: int | None = None
@@ -62,12 +63,27 @@ class SearchConfigIn(BaseModel):
             return v
         return [x for x in v if x in _SEARCH_FIELD_IDS]
 
+    @field_validator("search_url")
+    @classmethod
+    def search_url_normalize(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        if not s:
+            return None
+        # базовая защита: только http(s)
+        if not re.match(r"^https?://", s, flags=re.IGNORECASE):
+            raise ValueError("search_url должен начинаться с http:// или https://")
+        return s
+
 
 class SettingsIn(BaseModel):
     gemini_api_key: str | None = None
     resume_text: str | None = None
     groq_api_key: str | None = None
     groq_model: str | None = None
+    cover_letter_mode: str | None = None
+    cover_letter_text: str | None = None
     search: SearchConfigIn | None = None
 
 
@@ -76,6 +92,8 @@ class SettingsOut(BaseModel):
     resume_text: str | None = None
     groq_model: str | None = None
     groq_configured: bool | None = None
+    cover_letter_mode: str | None = None
+    cover_letter_text: str | None = None
     search: SearchConfigIn | None = None
 
 

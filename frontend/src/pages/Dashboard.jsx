@@ -10,6 +10,7 @@ export default function Dashboard() {
   const [extSettings, setExtSettings] = useState(null)
   const [sentToday, setSentToday] = useState(0)
   const [activityToday, setActivityToday] = useState(null)
+  const [letterStats, setLetterStats] = useState(null)
   const refreshInFlight = useRef(false)
   const progress = useMemo(() => {
     const limit = extSettings?.daily_limit ?? 50
@@ -20,12 +21,16 @@ export default function Dashboard() {
     if (refreshInFlight.current) return
     refreshInFlight.current = true
     try {
-      const { data } = await api.get('/dashboard/summary')
+      const [{ data }, { data: ls }] = await Promise.all([
+        api.get('/dashboard/summary'),
+        api.get('/dashboard/letter-generation-stats', { params: { limit: 5000 } }).catch(() => ({ data: null })),
+      ])
       setStatus(data.status ?? null)
       setApps(data.recent_applications || [])
       setExtSettings(data.extension ?? null)
       setSentToday(data.sent_today?.count ?? 0)
       setActivityToday(data.activity_today ?? null)
+      setLetterStats(ls)
     } finally {
       refreshInFlight.current = false
     }
@@ -39,6 +44,8 @@ export default function Dashboard() {
 
   const s = status?.session
   const act = activityToday
+  const ls = letterStats?.summary
+  const topReasons = letterStats?.top_validation_reasons || []
 
   return (
     <div className="space-y-6 relative">
@@ -122,6 +129,58 @@ export default function Dashboard() {
             style={{ width: `${Math.min(100, (progress.sent / (progress.limit || 1)) * 100)}%` }}
           />
         </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4 transition-shadow duration-200 hover:border-slate-700">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="text-sm text-slate-300 flex items-center gap-1 flex-wrap">
+            Качество писем (по логам генерации)
+            <Hint title="Сводка по logs/users/user_{id}/letter_generation.jsonl: сколько писем прошло с первой/второй/третьей попытки и какие причины валидации встречаются чаще." />
+          </div>
+          {ls?.sampled_lines ? (
+            <div className="text-xs text-slate-500">
+              выборка: {ls.sampled_lines} строк · писем: {ls.total_letters}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">нет данных (письма ещё не генерировались)</div>
+          )}
+        </div>
+
+        {ls?.total_letters ? (
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+              <div className="text-xs text-slate-500 mb-2">Успех по попытке</div>
+              <div className="space-y-1 text-sm">
+                {Object.entries(ls.success_by_attempt || {}).map(([k, v]) => (
+                  <div key={k} className="flex items-center justify-between gap-2">
+                    <span className="text-slate-300">attempt {k}</span>
+                    <span className="text-slate-200 tabular-nums">{v}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                  <span className="text-slate-400">give up</span>
+                  <span className="text-slate-200 tabular-nums">{ls.give_up ?? 0}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-3">
+              <div className="text-xs text-slate-500 mb-2">Частые причины валидации</div>
+              {topReasons.length ? (
+                <ul className="space-y-1 text-sm">
+                  {topReasons.slice(0, 8).map((r) => (
+                    <li key={r.reason} className="flex items-start justify-between gap-2">
+                      <span className="text-slate-300 min-w-0 break-words">{r.reason}</span>
+                      <span className="text-slate-200 tabular-nums shrink-0">{r.count}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-sm text-slate-500">Нет причин (всё проходит) или нет данных.</div>
+              )}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div

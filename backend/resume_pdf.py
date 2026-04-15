@@ -306,6 +306,23 @@ def trim_resume_for_prompt(text: str, limit: int = RESUME_TEXT_PROMPT_MAX) -> st
     return cut.rstrip() + "\n\n[… текст резюме сокращён для промпта …]"
 
 
+def extract_experience_block(text: str) -> str:
+    """
+    Вырезает только блок опыта и достижений из резюме, чтобы промпт не раздувался школой/языками/навыками.
+    Ожидаемый формат — результат polish_resume_text_for_llm (с заголовками вида '## Опыт работы').
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    start = re.search(r"(?mi)^##\s*Опыт\s+работы\b", t)
+    end = re.search(r"(?mi)^##\s*(Образование|Навыки|Ключевые\s+навыки|Знание\s+языков)\b", t)
+    if start and end and end.start() > start.start():
+        return t[start.start() : end.start()].strip()
+    if start:
+        return t[start.start() : start.start() + 3000].strip()
+    return t[:3000].strip()
+
+
 def extract_resume_pdf_text(raw: bytes) -> str:
     if len(raw) > MAX_RESUME_PDF_BYTES:
         raise ValueError("Файл больше 6 МБ")
