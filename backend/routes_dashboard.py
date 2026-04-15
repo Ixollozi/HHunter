@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from .apply import is_running
 from .auth import get_current_user
 from .deps import get_db
+from .logger import LOG_DIR
 from .models import ActivityLog, Application, SearchConfig, Session as DbSession, User
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -186,7 +187,7 @@ def letter_generation_stats(
     - частые причины валидации (validation_message)
     """
     lim = max(200, min(int(limit or 5000), 20000))
-    path = Path("logs") / "users" / f"user_{user.id}" / "letter_generation.jsonl"
+    path = LOG_DIR / "users" / f"user_{user.id}" / "letter_generation.jsonl"
     if not path.exists():
         return {"ok": True, "items": [], "summary": {"total_letters": 0}}
 

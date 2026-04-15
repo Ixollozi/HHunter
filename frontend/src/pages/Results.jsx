@@ -18,12 +18,36 @@ function formatVacancyTitleWithId(r) {
   return `${name}(${id})`
 }
 
+function letterModeLabel(r) {
+  if (!r || r.source !== 'application') return '—'
+  if (r.status !== 'sent') return '—'
+  return r.model_used ? 'AI' : 'custom'
+}
+
+function normalizeReason(r) {
+  const sr = (r?.skip_reason || '').trim()
+  const em = (r?.error_message || '').trim()
+  const v = sr || em
+  if (!v) return ''
+  const map = {
+    low_score: 'Нерелевантно (low_score)',
+    captcha: 'Капча (captcha)',
+    channel_closed: 'Канал закрыт (channel_closed)',
+    ui_not_detected: 'UI не распознан (ui_not_detected)',
+    submit_not_confirmed: 'Не подтверждена отправка (submit_not_confirmed)',
+    submit_button_missing: 'Кнопка отправки не найдена (submit_button_missing)',
+    simple_submit_btn_missing: 'Кнопка отправки не найдена (simple_submit_btn_missing)',
+  }
+  return map[v] || v
+}
+
 export default function Results() {
   const [items, setItems] = useState([])
   const [blacklistExtra, setBlacklistExtra] = useState([])
   const [status, setStatus] = useState('')
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
+  const [reason, setReason] = useState('')
 
   function fmt(dt) {
     return String(dt || '').replace('T', ' ').slice(0, 19)
@@ -45,7 +69,8 @@ export default function Results() {
         }
         const { data } = await api.get('/applications', { params })
         if (cancelled) return
-        setItems(data.items || [])
+        const loaded = data.items || []
+        setItems(loaded)
 
         // «Все статусы»: отдельно тянем блэклист — в общем merge старые баны могут не попасть в первые N строк
         if (!status) {
@@ -164,6 +189,20 @@ export default function Results() {
           <option value="error">Ошибка</option>
           <option value="blacklisted">Только блэклист</option>
         </select>
+        <select
+          className={`${fieldInline} min-w-[240px]`}
+          title="Фильтр по причине (skip_reason/error_message)."
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        >
+          <option value="">Все причины</option>
+          <option value="low_score">Нерелевантно (low_score)</option>
+          <option value="captcha">Капча (captcha)</option>
+          <option value="channel_closed">Канал закрыт (channel_closed)</option>
+          <option value="ui_not_detected">UI не распознан (ui_not_detected)</option>
+          <option value="submit_not_confirmed">Не подтверждена отправка</option>
+          <option value="submit_button_missing">Кнопка отправки не найдена</option>
+        </select>
         <button
           type="button"
           onClick={load}
@@ -236,10 +275,20 @@ export default function Results() {
               <th className="p-3" title="Почему пропущено или текст ошибки API.">
                 Причина / ошибка
               </th>
+              <th className="p-3" title="Источник письма: AI или custom (если статус sent).">
+                Письмо
+              </th>
             </tr>
           </thead>
           <tbody>
-            {items.map((r) => {
+            {items
+              .filter((r) => {
+                if (!reason) return true
+                const sr = (r?.skip_reason || '').trim()
+                const em = (r?.error_message || '').trim()
+                return sr === reason || em === reason
+              })
+              .map((r) => {
               const rowKey = r.source === 'blacklist' ? `bl-${r.id}` : `app-${r.id}`
               const vacancyHref = r.vacancy_url || (r.vacancy_id ? `${HH_VACANCY_BASE}/${r.vacancy_id}` : null)
               return (
@@ -278,7 +327,8 @@ export default function Results() {
                   )}
                 </td>
                 <td className="p-3 text-slate-300">{r.company_name || ''}</td>
-                <td className="p-3 text-slate-400">{r.skip_reason || r.error_message || ''}</td>
+                <td className="p-3 text-slate-400">{normalizeReason(r)}</td>
+                <td className="p-3 text-slate-400">{letterModeLabel(r)}</td>
               </tr>
               )
             })}

@@ -14,6 +14,7 @@ from .deps import get_db
 from .letter_generation import get_quality_letter, vacancy_dict_for_extension
 from .logger import log_app
 from .logger import log_letter_generation
+from .rate_limit import limiter
 from .models import ActivityLog, Application, BlacklistedVacancy, SearchConfig, Session as DbSession, User, UserSettings
 from .search_params import search_config_dict_from_row
 from .schemas import (
@@ -29,28 +30,152 @@ router = APIRouter(prefix="/extension", tags=["extension"])
 
 _KEEP_ACTIVITY_ROWS = 2500
 
-# --- Simple relevance filter (anti-spam, save tokens) ---
-CORE_SKILLS = {
-    "python",
-    "fastapi",
-    "django",
-    "postgresql",
-    "postgres",
-    "docker",
-    "redis",
-    "celery",
-    "rest",
-    "api",
-    "flask",
+# rate limits (per-user, per-process)
+_RL_LOG_PER_MIN = 60
+_RL_GEN_PER_MIN = 10
+
+# --- Relevance filter (anti-spam, save tokens) ---
+_PRESETS: dict[str, set[str]] = {
+    "python_backend": {
+        "python",
+        "fastapi",
+        "django",
+        "flask",
+        "api",
+        "rest",
+        "postgres",
+        "postgresql",
+        "redis",
+        "celery",
+        "docker",
+    },
+    "frontend": {"react", "typescript", "javascript", "redux", "next", "vite", "webpack", "html", "css"},
+    "qa": {"qa", "testing", "pytest", "selenium", "playwright", "postman", "api", "rest", "jira"},
 }
 
 
-def score_vacancy(description: str, title: str) -> int:
-    text = f"{description or ''} {title or ''}".lower()
-    score = sum(1 for s in CORE_SKILLS if s in text)
-    if any(w in text for w in ["senior", "lead", "architect", "5+ лет", "7+ лет"]):
-        score -= 3
+def _parse_skill_line(s: str) -> list[str]:
+    raw = (s or "").strip()
+    if not raw:
+        return []
+    parts = re.split(r"[,;\n|•\t]+", raw)
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        t = p.strip().lower()
+        if not t:
+            continue
+        if len(t) > 40:
+            t = t[:40]
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out[:120]
+
+
+def _parse_relevance_terms(raw: str) -> tuple[list[str], list[str]]:
+    """
+    Поддержка простого DSL без миграций:
+    - обычные слова/фразы -> positive
+    - строки/термы с префиксом '-' -> negative (минус-слова, чтобы отсеять вакансии)
+    Пример:
+      python, fastapi, postgresql
+      -1c
+      -php
+      -react
+    """
+    pos: list[str] = []
+    neg: list[str] = []
+    for t in _parse_skill_line(raw or ""):
+        if t.startswith("-") and len(t) >= 2:
+            neg.append(t[1:].strip())
+        else:
+            pos.append(t)
+    return pos, neg
+
+
+def _normalize_text(s: str) -> str:
+    t = (s or "").lower()
+    t = t.replace("\u00a0", " ")
+    t = re.sub(r"[\t\r]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _tokenize_words(s: str) -> set[str]:
+    # слова/технологии: python, fastapi, postgresql, c#, c++
+    words = set(re.findall(r"[a-zа-яё0-9+#.\-]{2,32}", s, flags=re.IGNORECASE))
+    return {w.lower() for w in words if w}
+
+
+def score_vacancy(description: str, title: str, *, skills: set[str]) -> int:
+    """
+    Улучшенная эвристика:
+    - title матчит сильнее, чем description
+    - термы считаются как фразы (substring) + как слова (tokenize), чтобы не промахиваться из-за пунктуации
+    - поддержка минус-слов (если встретилось в title/desc — сильный штраф)
+    """
+    t_title = _normalize_text(title or "")
+    t_desc = _normalize_text(description or "")
+    words_title = _tokenize_words(t_title)
+    words_desc = _tokenize_words(t_desc)
+
+    score = 0
+    # positive terms
+    for term in skills:
+        term = (term or "").strip().lower()
+        if not term:
+            continue
+        # фраза
+        in_title_phrase = term in t_title
+        in_desc_phrase = term in t_desc
+        # слово
+        in_title_word = term in words_title
+        in_desc_word = term in words_desc
+        if in_title_phrase or in_title_word:
+            score += 2
+        elif in_desc_phrase or in_desc_word:
+            score += 1
+
+    # penalties for seniority mismatch (мягче, чтобы не отбрасывать хорошие вакансии)
+    senior_markers = ["senior", "lead", "architect", "7+ лет", "6+ лет", "5+ лет", "principal", "staff"]
+    if any(m in t_title for m in senior_markers):
+        score -= 2
+    elif any(m in t_desc for m in senior_markers):
+        score -= 1
+
     return score
+
+
+def _relevance_settings_from_user(st: UserSettings | None) -> tuple[set[str], int, str]:
+    profile = ((getattr(st, "relevance_profile", None) or "") if st else "").strip().lower()
+    if not profile:
+        profile = "python_backend"
+    min_score = 3
+    try:
+        if st and getattr(st, "relevance_min_score", None) is not None:
+            min_score = int(getattr(st, "relevance_min_score") or 3)
+    except Exception:
+        min_score = 3
+    min_score = max(0, min(min_score, 50))
+
+    raw_custom = (getattr(st, "relevance_skills", "") or "") if st else ""
+    custom_pos, custom_neg = _parse_relevance_terms(raw_custom)
+    if profile == "custom":
+        skills = set(custom_pos)
+    else:
+        base = _PRESETS.get(profile) or _PRESETS["python_backend"]
+        skills = set(base) | set(custom_pos)
+    if not skills:
+        skills = set(_PRESETS["python_backend"])
+        profile = "python_backend"
+    # negative terms мы кодируем обратно как "-term" прямо в skills-set, чтобы не менять сигнатуры и модель.
+    # (score_vacancy их не использует напрямую; применим штрафы там, где вызываем).
+    for n in custom_neg[:80]:
+        if n:
+            skills.add(f"-{n}")
+    return skills, min_score, profile
 
 
 def _prune_user_activity_logs(db: Session, user_id: int) -> None:
@@ -209,6 +334,16 @@ def extension_generate_letter(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ExtensionGenerateLetterOut:
+    ok, retry = limiter.allow(
+        key=f"u{user.id}:ext_generate_letter",
+        capacity=_RL_GEN_PER_MIN,
+        refill_per_sec=_RL_GEN_PER_MIN / 60.0,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"code": "rate_limited", "retry_after_s": round(retry, 2)},
+        )
     st = db.get(UserSettings, user.id)
     if not st:
         raise HTTPException(status_code=400, detail="Нет настроек пользователя.")
@@ -249,20 +384,32 @@ def extension_generate_letter(
         salary_info=body.salary_info or "",
     )
     # Relevance gate: if too low — return 422 so content script can treat it as "skipped".
-    sc = score_vacancy(body.vacancy_description or "", body.vacancy_title or "")
-    if sc < 3:
+    skills, min_score, profile = _relevance_settings_from_user(st)
+    # negative terms are encoded as "-term"
+    neg = {s[1:] for s in skills if isinstance(s, str) and s.startswith("-") and len(s) > 1}
+    pos = {s for s in skills if isinstance(s, str) and not s.startswith("-")}
+    sc = score_vacancy(body.vacancy_description or "", body.vacancy_title or "", skills=pos)
+    # apply negative penalties (substring match)
+    txt = f"{body.vacancy_title or ''} {body.vacancy_description or ''}".lower()
+    neg_hits = [t for t in neg if t and t in txt]
+    if neg_hits:
+        sc -= 4 * min(len(neg_hits), 3)
+    if sc < min_score:
         log_letter_generation(
             user.id,
             {
                 "stage": "vacancy_score_skip",
                 "score": sc,
+                "min_score": min_score,
+                "profile": profile,
+                "neg_hits": neg_hits[:5] if neg_hits else None,
                 "vacancy_title": (body.vacancy_title or "")[:200],
                 "company_name": (body.company_name or "")[:200],
             },
         )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "low_score", "score": sc, "min_score": 3},
+            detail={"code": "low_score", "score": sc, "min_score": min_score},
         )
     try:
         api_key = decrypt_secret(st.groq_api_key_enc or "")
@@ -485,6 +632,17 @@ def extension_log(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, str]:
+    ok, retry = limiter.allow(
+        key=f"u{user.id}:ext_log",
+        capacity=_RL_LOG_PER_MIN,
+        refill_per_sec=_RL_LOG_PER_MIN / 60.0,
+    )
+    if not ok:
+        # Не логируем через log_app, чтобы не усугублять спам при DDoS/лупе.
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"code": "rate_limited", "retry_after_s": round(retry, 2)},
+        )
     msg = body.message.strip()[:4000]
     src = (body.source or "").strip() or None
     st = (body.step or "").strip() or None

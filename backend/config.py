@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     cors_extra_origins: str = ""
     # Разрешить Origin вида chrome-extension://... (распакованное расширение).
     cors_allow_chrome_extension_regex: bool = True
+    # Явный allowlist ID расширений Chrome: chrome-extension://<id>.
+    # Пример: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    cors_chrome_extension_ids: str = ""
+
+    # Логи (logs/): ротация и retention.
+    # LOG_DEBUG=false: не писать наиболее "шумные" диагностические записи (превью резюме/сырой ответ модели).
+    log_debug: bool = False
+    # Через сколько дней удалять старые логи (mtime). 0/отрицательное = не удалять.
+    log_retention_days: int = 7
+    # Максимальный размер одного файла лога (в мегабайтах) до ротации. 0/отрицательное = без ротации по размеру.
+    log_max_mb: int = 10
 
     # Модель Gemini API (Google Gen AI SDK): https://ai.google.dev/gemini-api/docs/models
     gemini_model: str = "gemini-2.5-flash"

@@ -34,7 +34,14 @@ def create_app() -> FastAPI:
         r"https://([\w-]+\.)*hh\.uz",
         r"https://([\w-]+\.)*hh\.kz",
     ]
-    if settings.cors_allow_chrome_extension_regex:
+    # Chrome extension origins:
+    # - если задан allowlist ID — разрешаем только их
+    # - иначе, опционально, legacy режим: разрешаем любой chrome-extension://... (не рекомендуется)
+    _ext_ids = [x.strip() for x in (settings.cors_chrome_extension_ids or "").split(",") if x.strip()]
+    if _ext_ids:
+        _safe_ids = [__import__("re").escape(x) for x in _ext_ids]
+        _re_parts.append(r"chrome-extension://(" + "|".join(_safe_ids) + r")")
+    elif settings.cors_allow_chrome_extension_regex:
         _re_parts.append(r"chrome-extension://[\w-]+")
     _origin_re = "|".join(_re_parts)
 
@@ -50,9 +57,10 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup() -> None:
         init_db()
-        from .logger import ensure_log_dirs
+        from .logger import ensure_log_dirs, prune_logs_now
 
         ensure_log_dirs()
+        prune_logs_now()
 
     app.include_router(auth_router)
     app.include_router(settings_router)

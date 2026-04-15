@@ -1,15 +1,21 @@
+import { lazy, Suspense } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { RequireAuth } from './components/RequireAuth'
-import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import Register from './pages/Register'
-import Extension from './pages/Extension'
-import Logs from './pages/Logs'
-import Reports from './pages/Reports'
-import Results from './pages/Results'
-import Search from './pages/Search'
-import Settings from './pages/Settings'
+
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Search = lazy(() => import('./pages/Search'))
+const Results = lazy(() => import('./pages/Results'))
+const Reports = lazy(() => import('./pages/Reports'))
+const Logs = lazy(() => import('./pages/Logs'))
+const Extension = lazy(() => import('./pages/Extension'))
+
+function PageFallback() {
+  return <div className="text-slate-400 text-sm p-4">Загрузка…</div>
+}
 
 function App() {
   return (
@@ -22,7 +28,9 @@ function App() {
           index
           element={
             <RequireAuth>
-              <Dashboard />
+              <Suspense fallback={<PageFallback />}>
+                <Dashboard />
+              </Suspense>
             </RequireAuth>
           }
         />
@@ -30,7 +38,9 @@ function App() {
           path="settings"
           element={
             <RequireAuth>
-              <Settings />
+              <Suspense fallback={<PageFallback />}>
+                <Settings />
+              </Suspense>
             </RequireAuth>
           }
         />
@@ -38,7 +48,9 @@ function App() {
           path="search"
           element={
             <RequireAuth>
-              <Search />
+              <Suspense fallback={<PageFallback />}>
+                <Search />
+              </Suspense>
             </RequireAuth>
           }
         />
@@ -46,7 +58,9 @@ function App() {
           path="results"
           element={
             <RequireAuth>
-              <Results />
+              <Suspense fallback={<PageFallback />}>
+                <Results />
+              </Suspense>
             </RequireAuth>
           }
         />
@@ -54,7 +68,9 @@ function App() {
           path="reports"
           element={
             <RequireAuth>
-              <Reports />
+              <Suspense fallback={<PageFallback />}>
+                <Reports />
+              </Suspense>
             </RequireAuth>
           }
         />
@@ -62,7 +78,9 @@ function App() {
           path="logs"
           element={
             <RequireAuth>
-              <Logs />
+              <Suspense fallback={<PageFallback />}>
+                <Logs />
+              </Suspense>
             </RequireAuth>
           }
         />
@@ -70,7 +88,9 @@ function App() {
           path="extension"
           element={
             <RequireAuth>
-              <Extension />
+              <Suspense fallback={<PageFallback />}>
+                <Extension />
+              </Suspense>
             </RequireAuth>
           }
         />

@@ -83,6 +83,13 @@ python start.py --migrate
 - Пересобрать фронт перед preview: `python start.py --no-dev --force-frontend-build`
 - Не пересобирать фронт, если `dist` уже есть: `python start.py --no-dev --skip-frontend-build`
 
+### Про `frontend/dist`
+
+Каталог `frontend/dist` — это артефакт сборки Vite. Он **не коммитится** в репозиторий (см. `.gitignore`) и обычно собирается:
+
+- автоматически в `start.py` при `--no-dev` (vite preview) — если исходники новее `dist`
+- вручную командой `cd frontend && npm run build`
+
 ### Только API или только фронт
 
 ```bash

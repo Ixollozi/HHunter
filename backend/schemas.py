@@ -84,6 +84,9 @@ class SettingsIn(BaseModel):
     groq_model: str | None = None
     cover_letter_mode: str | None = None
     cover_letter_text: str | None = None
+    relevance_profile: str | None = None
+    relevance_skills: str | None = None
+    relevance_min_score: int | None = None
     search: SearchConfigIn | None = None
 
 
@@ -94,6 +97,9 @@ class SettingsOut(BaseModel):
     groq_configured: bool | None = None
     cover_letter_mode: str | None = None
     cover_letter_text: str | None = None
+    relevance_profile: str | None = None
+    relevance_skills: str | None = None
+    relevance_min_score: int | None = None
     search: SearchConfigIn | None = None
 
 

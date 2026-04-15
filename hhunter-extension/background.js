@@ -17,16 +17,71 @@ async function serpCollectAsync() {
   }
   const ids = []
   const seen = new Set()
-  document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]').forEach((card) => {
-    const a =
-      card.querySelector('a[data-qa="serp-item__title"]') || card.querySelector('a[href*="/vacancy/"]')
-    if (!a || !a.href) return
-    const m = a.href.match(/\/vacancy\/(\d+)/)
-    if (m && !seen.has(m[1])) {
+
+  function pushIdFromHref(href) {
+    const m = String(href || '').match(/\/vacancy\/(\d+)/)
+    if (m && m[1] && !seen.has(m[1])) {
       seen.add(m[1])
       ids.push(m[1])
+      return true
     }
-  })
+    return false
+  }
+
+  // Primary selectors (hh.ru / hh.uz may differ)
+  const cardSelectors = [
+    '[data-qa="vacancy-serp__vacancy"]',
+    '[data-qa="serp-item"]',
+    '[data-qa*="serp-item"]',
+  ]
+  let cards = []
+  for (const sel of cardSelectors) {
+    try {
+      const found = Array.from(document.querySelectorAll(sel))
+      if (found.length) {
+        cards = found
+        break
+      }
+    } catch {
+      /* */
+    }
+  }
+
+  if (cards.length) {
+    cards.forEach((card) => {
+      const a =
+        card.querySelector('a[data-qa="serp-item__title"]') ||
+        card.querySelector('a[data-qa*="serp-item__title"]') ||
+        card.querySelector('a[href*="/vacancy/"]')
+      if (!a || !a.href) return
+      pushIdFromHref(a.href)
+    })
+  }
+
+  // Fallback: collect any /vacancy/{id} links from the page (within main content)
+  if (ids.length < 3) {
+    let scope = null
+    try {
+      scope =
+        document.querySelector('[data-qa="vacancy-serp__results"]') ||
+        document.querySelector('[data-qa="serp-results"]') ||
+        document.querySelector('main') ||
+        document.body
+    } catch {
+      scope = document.body
+    }
+    try {
+      Array.from(scope.querySelectorAll('a[href*="/vacancy/"]')).forEach((a) => {
+        if (!a || !a.href) return
+        pushIdFromHref(a.href)
+      })
+    } catch {
+      /* */
+    }
+  }
+
+  // Safety: cap to avoid accidental huge runs on malformed pages
+  if (ids.length > 120) ids.length = 120
   const nextEl = document.querySelector('[data-qa="pager-next"]')
   const nextHref = nextEl && nextEl.href ? nextEl.href : null
   return { ids, nextHref }

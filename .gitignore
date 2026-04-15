@@ -2,6 +2,8 @@ backend/.venv/
 backend/__pycache__/
 backend/.pytest_cache/
 backend/*.log
+backend/.coverage
+backend/htmlcov/
 
 database/*.db
 database/*.sqlite
@@ -19,4 +21,8 @@ frontend/.env
 .cursorignore
 .vscode/
 __pycache__
-_pycache_/
+**/__pycache__/
+
+# Chrome extension build artifacts
+hhunter-extension/*.crx
+hhunter-extension/*.zip

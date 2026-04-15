@@ -226,23 +226,30 @@
     return ''
   }
 
-  async function tryCollectVacancyContact(timeoutMs) {
+  async function tryCollectVacancyContact(timeoutMs, apiBase, token) {
     const t = timeoutMs || 10000
-    const out = { contact_phone: '', contact_name: '' }
+    const out = { contact_phone: '', contact_name: '', reason_code: '' }
 
     let phone = readVacancyContactPhoneFromDom()
     if (phone) {
       out.contact_phone = phone.slice(0, 128)
       out.contact_name = readVacancyContactNameFromDom()
+      out.reason_code = 'contact_ok_dom'
       return out
     }
 
     const btn = findSvyazatsyaClickTarget()
-    if (!btn) return out
+    if (!btn) {
+      out.reason_code = 'contact_btn_missing'
+      try { await postExtensionLog(apiBase, token, 'INFO', 'Контакты: кнопка «Связаться» не найдена', 'contact_btn_missing') } catch { /* */ }
+      return out
+    }
 
     try {
       btn.click()
     } catch {
+      out.reason_code = 'contact_btn_click_failed'
+      try { await postExtensionLog(apiBase, token, 'WARNING', 'Контакты: не удалось нажать «Связаться»', 'contact_btn_click_failed') } catch { /* */ }
       return out
     }
 
@@ -254,6 +261,12 @@
 
     out.contact_phone = phone.slice(0, 128)
     out.contact_name = readVacancyContactNameFromDom()
+    if (!out.contact_phone) {
+      out.reason_code = 'contact_phone_missing'
+      try { await postExtensionLog(apiBase, token, 'INFO', 'Контакты: телефон не появился после «Связаться»', 'contact_phone_missing') } catch { /* */ }
+    } else {
+      out.reason_code = 'contact_ok_after_click'
+    }
 
     try {
       const ev = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true })
@@ -1210,11 +1223,13 @@
       'apply_start',
     )
 
-    const contactInfo = await tryCollectVacancyContact(10000)
+    const contactInfo = await tryCollectVacancyContact(10000, apiBase, token)
     payload.contact_phone = contactInfo.contact_phone || ''
     payload.contact_name = contactInfo.contact_name || ''
     if (payload.contact_phone) {
       await postExtensionLog(apiBase, token, 'INFO', `Телефон из «Связаться»: ${payload.contact_phone.slice(0, 40)}`, 'apply_contact_ok')
+    } else if (contactInfo.reason_code) {
+      await postExtensionLog(apiBase, token, 'INFO', `Контакты: ${contactInfo.reason_code}`, `apply_contact_${contactInfo.reason_code}`)
     }
 
     // ── Генерация письма ─────────────────────────────────────────────────

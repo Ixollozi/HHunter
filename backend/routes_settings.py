@@ -5,6 +5,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user
+from .config import settings
 from .deps import get_db
 from .crypto import decrypt_secret, encrypt_secret
 from .letter_generation import generate_cover_letter
@@ -37,8 +38,25 @@ def get_settings(db: Session = Depends(get_db), user=Depends(get_current_user)) 
         groq_configured=bool((s.groq_api_key_enc or "").strip()),
         cover_letter_mode=(s.cover_letter_mode or "ai"),
         cover_letter_text=s.cover_letter_text,
+        relevance_profile=(s.relevance_profile or "python_backend"),
+        relevance_skills=(s.relevance_skills or ""),
+        relevance_min_score=int(s.relevance_min_score or 3),
         search=search,
     )
+
+
+@router.get("/health")
+def settings_health(user=Depends(get_current_user)) -> dict:
+    """
+    Быстрый health-check конфигурации, чтобы UI мог показать понятное сообщение
+    до попытки сохранить/расшифровать Groq API ключ.
+    """
+    fernet_ok = bool((settings.groq_key_fernet_secret or "").strip())
+    return {
+        "ok": True,
+        "groq_fernet_configured": fernet_ok,
+        "missing": [] if fernet_ok else ["GROQ_KEY_FERNET_SECRET"],
+    }
 
 
 @router.put("", response_model=SettingsOut)
@@ -49,7 +67,16 @@ def put_settings(payload: SettingsIn, db: Session = Depends(get_db), user=Depend
         db.add(s)
         db.flush()
 
-    for field in ["gemini_api_key", "resume_text", "groq_model", "cover_letter_mode", "cover_letter_text"]:
+    for field in [
+        "gemini_api_key",
+        "resume_text",
+        "groq_model",
+        "cover_letter_mode",
+        "cover_letter_text",
+        "relevance_profile",
+        "relevance_skills",
+        "relevance_min_score",
+    ]:
         val = getattr(payload, field)
         if val is not None:
             setattr(s, field, val)

@@ -42,6 +42,15 @@ class UserSettings(Base):
     cover_letter_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Своё письмо/шаблон для расширения (если cover_letter_mode='custom')."""
 
+    relevance_profile: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """Профиль relevance scoring: python_backend / frontend / qa / custom."""
+
+    relevance_skills: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Навыки для relevance scoring (строка: через запятую/переносы строк)."""
+
+    relevance_min_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Минимальный score для пропуска/отклика (если None — используется дефолт)."""
+
     user: Mapped[User] = relationship(back_populates="settings")
 
 

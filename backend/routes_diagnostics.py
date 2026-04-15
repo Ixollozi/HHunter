@@ -5,12 +5,14 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user
 from .deps import get_db
+from .rate_limit import limiter
 from .letter_demo import (
     build_letter_demo_payload_api,
     build_letter_demo_payload_web,
@@ -21,6 +23,8 @@ from .models import Application, SearchConfig, Session as DbSession, User, UserS
 from .search_params import search_config_dict_from_row
 
 router = APIRouter(prefix="/diagnostics", tags=["diagnostics"])
+
+_RL_DIAG_PER_MIN = 6
 
 
 def _ndjson_line(obj: dict[str, Any]) -> bytes:
@@ -40,6 +44,16 @@ def run_diagnostics_stream(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> StreamingResponse:
+    ok, retry = limiter.allow(
+        key=f"u{user.id}:diagnostics_stream",
+        capacity=_RL_DIAG_PER_MIN,
+        refill_per_sec=_RL_DIAG_PER_MIN / 60.0,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"code": "rate_limited", "retry_after_s": round(retry, 2)},
+        )
     """
     Потоковая диагностика (NDJSON): отдаёт шаги проверки в реальном времени.
     Клиент читает построчно и обновляет UI.

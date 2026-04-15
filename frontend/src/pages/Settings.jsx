@@ -12,6 +12,7 @@ export default function Settings() {
   })
   const [groqKeyInput, setGroqKeyInput] = useState('')
   const [groqConfigured, setGroqConfigured] = useState(false)
+  const [health, setHealth] = useState(null)
   const [testRes, setTestRes] = useState(null)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
@@ -29,7 +30,10 @@ export default function Settings() {
   }, [form])
 
   async function load() {
-    const { data } = await api.get('/settings')
+    const [{ data }, { data: h }] = await Promise.all([
+      api.get('/settings'),
+      api.get('/settings/health').catch(() => ({ data: null })),
+    ])
     inhibitAutosave.current += 1
     const next = {
       resume_text: data.resume_text || '',
@@ -38,6 +42,7 @@ export default function Settings() {
       cover_letter_text: data.cover_letter_text || '',
     }
     setGroqConfigured(!!data.groq_configured)
+    setHealth(h)
     lastSavedSettingsJsonRef.current = JSON.stringify(next)
     setForm(next)
   }
@@ -171,6 +176,12 @@ export default function Settings() {
         <p className="text-slate-400 mt-1">
           Поля сохраняются автоматически через ~3 с после изменения (если данные реально поменялись); поиск и лимиты — вкладка «Поиск».
         </p>
+        {health && health.groq_fernet_configured === false ? (
+          <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-100 text-sm">
+            На сервере не задан <code className="text-amber-200">GROQ_KEY_FERNET_SECRET</code> — сохранить/расшифровать ключ Groq не получится.
+            Добавьте переменную в <code className="text-amber-200">backend/.env</code> и перезапустите API.
+          </div>
+        ) : null}
         {syncHint ? <p className="text-emerald-400/90 text-sm mt-1">{syncHint}</p> : null}
       </div>
 

@@ -136,8 +136,14 @@ function buildSearchPayload(f) {
 
 export default function Search() {
   const [form, setForm] = useState(defaultForm)
+  const [relevance, setRelevance] = useState({
+    relevance_profile: 'python_backend',
+    relevance_min_score: 3,
+    relevance_skills: '',
+  })
   const [saving, setSaving] = useState(false)
   const [syncHint, setSyncHint] = useState('')
+  const [urlCopied, setUrlCopied] = useState(false)
   const [areaQuery, setAreaQuery] = useState('')
   const [areaPicks, setAreaPicks] = useState([])
   const [areaOpen, setAreaOpen] = useState(false)
@@ -145,23 +151,36 @@ export default function Search() {
   const [saveToast, setSaveToast] = useState(null)
 
   const formRef = useRef(form)
+  const relevanceRef = useRef(relevance)
   const inhibitAutosave = useRef(1)
   const autosaveTimerRef = useRef(null)
   const lastSavedSearchJsonRef = useRef('')
+  const lastSavedRelevanceJsonRef = useRef('')
 
   useEffect(() => {
     formRef.current = form
   }, [form])
 
+  useEffect(() => {
+    relevanceRef.current = relevance
+  }, [relevance])
+
   async function load() {
     const { data } = await api.get('/settings')
     const s = data.search || {}
     const normalized = normalizeLoadedSearch(s)
+    const rel = {
+      relevance_profile: data.relevance_profile || 'python_backend',
+      relevance_min_score: data.relevance_min_score ?? 3,
+      relevance_skills: data.relevance_skills || '',
+    }
     inhibitAutosave.current += 1
     lastSavedSearchJsonRef.current = JSON.stringify(buildSearchPayload(normalized))
+    lastSavedRelevanceJsonRef.current = JSON.stringify(rel)
     const label = areaLabelFromId(normalized.area)
     setAreaQuery(label || (normalized.area ? `Регион id ${normalized.area}` : ''))
     setForm(normalized)
+    setRelevance(rel)
   }
 
   useEffect(() => {
@@ -197,9 +216,11 @@ export default function Search() {
       try {
         const payload = buildSearchPayload(formRef.current)
         const json = JSON.stringify(payload)
-        if (json === lastSavedSearchJsonRef.current) return
-        await api.put('/settings', { search: payload })
+        const relJson = JSON.stringify(relevanceRef.current)
+        if (json === lastSavedSearchJsonRef.current && relJson === lastSavedRelevanceJsonRef.current) return
+        await api.put('/settings', { search: payload, ...relevanceRef.current })
         lastSavedSearchJsonRef.current = json
+        lastSavedRelevanceJsonRef.current = relJson
         setSyncHint('Сохранено автоматически')
       } catch {
         setSyncHint('Не удалось сохранить — проверьте сеть и вход')
@@ -220,6 +241,31 @@ export default function Search() {
     const t = setTimeout(() => setSaveToast(null), 4000)
     return () => clearTimeout(t)
   }, [saveToast])
+
+  const effectiveSearchUrl = (() => {
+    const direct = String(form.search_url || '').trim()
+    if (direct) return direct
+    // Минимальный удобный превью-URL, если пользователь не вставил готовую ссылку.
+    // (Полную сборку URL как в расширении не повторяем, чтобы не расходиться по логике.)
+    const text = String(form.search_text || '').trim()
+    const area = String(form.area || '').trim()
+    if (!text && !area) return ''
+    const params = new URLSearchParams()
+    if (text) params.set('text', text)
+    if (area) params.set('area', area)
+    return `https://hh.ru/search/vacancy?${params.toString()}`
+  })()
+
+  async function copySearchUrl() {
+    if (!effectiveSearchUrl) return
+    try {
+      await navigator.clipboard?.writeText(effectiveSearchUrl)
+      setUrlCopied(true)
+      setTimeout(() => setUrlCopied(false), 2000)
+    } catch {
+      /* ignore */
+    }
+  }
 
   function toggleInList(field, code) {
     setForm((p) => {
@@ -258,8 +304,9 @@ export default function Search() {
     setSyncHint('')
     try {
       const payload = buildSearchPayload(form)
-      await api.put('/settings', { search: payload })
+      await api.put('/settings', { search: payload, ...relevance })
       lastSavedSearchJsonRef.current = JSON.stringify(payload)
+      lastSavedRelevanceJsonRef.current = JSON.stringify(relevance)
       setSyncHint('Сохранено')
       setSaveToast({ ok: true, msg: 'Параметры поиска успешно сохранены.' })
     } catch {
@@ -297,7 +344,7 @@ export default function Search() {
           <Hint title="Сохраняются в аккаунте для расширения (лимиты, паузы) и как шпаргалка фильтров при ручном поиске на сайтах вакансий." />
         </h1>
         <p className="text-slate-400 mt-1" title="Данные подтягиваются после входа и сохраняются в базе.">
-          Фильтры и лимиты для расширения и ваших же заметок по поиску. Изменения сохраняются сами через ~1,5 с (можно нажать «Сохранить» сразу).
+          Фильтры и лимиты для расширения. Изменения сохраняются сами через ~3 с (можно нажать «Сохранить» сразу).
         </p>
         {syncHint ? (
           <p
@@ -313,7 +360,49 @@ export default function Search() {
       </div>
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4 space-y-6 max-w-3xl">
-        <div className="grid grid-cols-1 gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-slate-300">
+            Быстрые действия
+            <div className="text-xs text-slate-500 mt-0.5">URL ниже используется расширением как приоритетный (если заполнен).</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => effectiveSearchUrl && window.open(effectiveSearchUrl, '_blank', 'noopener,noreferrer')}
+              disabled={!effectiveSearchUrl}
+              className={`px-3 py-2 rounded-xl bg-slate-800 text-white text-sm ${btnNeutral} disabled:opacity-50`}
+              title={effectiveSearchUrl ? 'Открыть выдачу в новой вкладке' : 'Заполните текст/регион или вставьте URL выдачи'}
+            >
+              Открыть выдачу
+            </button>
+            <button
+              type="button"
+              onClick={copySearchUrl}
+              disabled={!effectiveSearchUrl}
+              className={`px-3 py-2 rounded-xl bg-slate-800 text-white text-sm ${btnNeutral} disabled:opacity-50`}
+              title="Скопировать URL выдачи"
+            >
+              {urlCopied ? 'Скопировано' : 'Копировать URL'}
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={save}
+              className={`px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm ${btnPrimary} disabled:opacity-60`}
+              title="Сохранить параметры сейчас (не ждать автосохранения)."
+            >
+              {saving ? '…' : 'Сохранить'}
+            </button>
+          </div>
+        </div>
+
+        <section className="space-y-3">
+          <div className="text-sm text-slate-300 flex items-center gap-2">
+            Запрос
+            <Hint title="Текст запроса + (опционально) готовая ссылка на выдачу. Если URL задан — он приоритетнее остальных полей." />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3">
           <label className="block space-y-1">
             <span className="text-sm text-slate-400">Ключевые слова</span>
             <input
@@ -337,6 +426,11 @@ export default function Search() {
               value={form.search_url || ''}
               onChange={(e) => setForm((p) => ({ ...p, search_url: e.target.value }))}
             />
+            {effectiveSearchUrl ? (
+              <div className="text-xs text-slate-500 break-all">
+                Превью URL: <code className="text-slate-400">{effectiveSearchUrl}</code>
+              </div>
+            ) : null}
             {String(form.search_url || '').trim() ? (
               <button
                 type="button"
@@ -348,6 +442,14 @@ export default function Search() {
               </button>
             ) : null}
           </label>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="text-sm text-slate-300 flex items-center gap-2">
+            Регион и поля поиска
+            <Hint title="Коды полей поиска (название/описание/компания) + выбор региона. Эти поля помогают собрать URL (если вы не вставили готовую ссылку)." />
+          </div>
 
           <fieldset className="space-y-2">
             <legend className="text-sm text-slate-400 mb-1 flex items-center gap-2">
@@ -436,124 +538,138 @@ export default function Search() {
               ))}
             </div>
           </div>
-        </div>
+        </section>
 
-        <fieldset className="space-y-2">
-          <legend className="text-sm text-slate-400 mb-2">Опыт работы</legend>
-          <div className="flex flex-wrap gap-2">
-            {EXPERIENCE_OPTIONS.map((o) => (
-              <label
-                key={o.code || 'any'}
-                className={`inline-flex items-center gap-2 ${checkClass} ${form.experience === o.code ? 'border-indigo-500/50 ring-1 ring-indigo-500/25' : ''}`}
-              >
-                <input
-                  type="radio"
-                  name="experience"
-                  checked={form.experience === o.code}
-                  onChange={() => setForm((p) => ({ ...p, experience: o.code }))}
-                  className="accent-indigo-500"
-                />
-                {o.label}
+        <details className="rounded-xl border border-slate-800/80 bg-slate-950/30 p-4">
+          <summary className="cursor-pointer text-sm text-slate-300 select-none flex items-center justify-between gap-2">
+            <span>Дополнительные фильтры</span>
+            <span className="text-xs text-slate-500">опыт, занятость, график, период, сортировка, зарплата</span>
+          </summary>
+          <div className="pt-4 space-y-5">
+            <fieldset className="space-y-2">
+              <legend className="text-sm text-slate-400 mb-2">Опыт работы</legend>
+              <div className="flex flex-wrap gap-2">
+                {EXPERIENCE_OPTIONS.map((o) => (
+                  <label
+                    key={o.code || 'any'}
+                    className={`inline-flex items-center gap-2 ${checkClass} ${form.experience === o.code ? 'border-indigo-500/50 ring-1 ring-indigo-500/25' : ''}`}
+                  >
+                    <input
+                      type="radio"
+                      name="experience"
+                      checked={form.experience === o.code}
+                      onChange={() => setForm((p) => ({ ...p, experience: o.code }))}
+                      className="accent-indigo-500"
+                    />
+                    {o.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-2">
+              <legend className="text-sm text-slate-400 mb-2">Тип занятости</legend>
+              <div className="flex flex-wrap gap-2">
+                {EMPLOYMENT_OPTIONS.map((o) => (
+                  <label
+                    key={o.code}
+                    className={`${checkClass} ${form.employment?.includes(o.code) ? 'border-indigo-500/50 ring-1 ring-indigo-500/25' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.employment?.includes(o.code)}
+                      onChange={() => toggleInList('employment', o.code)}
+                      className="accent-indigo-500"
+                    />
+                    {o.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-2">
+              <legend className="text-sm text-slate-400 mb-2">График работы</legend>
+              <div className="flex flex-wrap gap-2">
+                {SCHEDULE_OPTIONS.map((o) => (
+                  <label
+                    key={o.code}
+                    className={`${checkClass} ${form.schedule?.includes(o.code) ? 'border-indigo-500/50 ring-1 ring-indigo-500/25' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.schedule?.includes(o.code)}
+                      onChange={() => toggleInList('schedule', o.code)}
+                      className="accent-indigo-500"
+                    />
+                    {o.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="block space-y-1">
+                <span className="text-sm text-slate-400">Период публикации</span>
+                <select
+                  className={field}
+                  title="За какой срок показывать свежие вакансии (для ориентира при ручном поиске)"
+                  value={form.period}
+                  onChange={(e) => setForm((p) => ({ ...p, period: Number(e.target.value) }))}
+                >
+                  {PERIOD_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </label>
-            ))}
-          </div>
-        </fieldset>
+              <label className="block space-y-1">
+                <span className="text-sm text-slate-400">Сортировка</span>
+                <select
+                  className={field}
+                  title="Параметр order_by"
+                  value={form.order_by}
+                  onChange={(e) => setForm((p) => ({ ...p, order_by: e.target.value }))}
+                >
+                  {ORDER_BY_OPTIONS.map((o) => (
+                    <option key={o.code} value={o.code}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
 
-        <fieldset className="space-y-2">
-          <legend className="text-sm text-slate-400 mb-2">Тип занятости</legend>
-          <div className="flex flex-wrap gap-2">
-            {EMPLOYMENT_OPTIONS.map((o) => (
-              <label key={o.code} className={`${checkClass} ${form.employment?.includes(o.code) ? 'border-indigo-500/50 ring-1 ring-indigo-500/25' : ''}`}>
+            <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+              <label className="block space-y-1 flex-1">
+                <span className="text-sm text-slate-400">Зарплата от</span>
+                <input
+                  className={field}
+                  placeholder="Не задано"
+                  type="number"
+                  min={0}
+                  value={form.salary === '' || form.salary == null ? '' : form.salary}
+                  onChange={(e) =>
+                    setForm((p) => ({
+                      ...p,
+                      salary: e.target.value === '' ? '' : Number(e.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <label className={`inline-flex items-center gap-2 ${checkClass} mb-0 sm:mb-1 shrink-0 h-[42px]`}>
                 <input
                   type="checkbox"
-                  checked={form.employment?.includes(o.code)}
-                  onChange={() => toggleInList('employment', o.code)}
+                  checked={!!form.only_with_salary}
+                  onChange={(e) => setForm((p) => ({ ...p, only_with_salary: e.target.checked }))}
                   className="accent-indigo-500"
                 />
-                {o.label}
+                Только с зарплатой
+                <Hint title="Учитывать только вакансии с указанной зарплатой (для единообразия с фильтрами на сайтах)." />
               </label>
-            ))}
+            </div>
           </div>
-        </fieldset>
-
-        <fieldset className="space-y-2">
-          <legend className="text-sm text-slate-400 mb-2">График работы</legend>
-          <div className="flex flex-wrap gap-2">
-            {SCHEDULE_OPTIONS.map((o) => (
-              <label key={o.code} className={`${checkClass} ${form.schedule?.includes(o.code) ? 'border-indigo-500/50 ring-1 ring-indigo-500/25' : ''}`}>
-                <input
-                  type="checkbox"
-                  checked={form.schedule?.includes(o.code)}
-                  onChange={() => toggleInList('schedule', o.code)}
-                  className="accent-indigo-500"
-                />
-                {o.label}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <label className="block space-y-1">
-            <span className="text-sm text-slate-400">Период публикации</span>
-            <select
-              className={field}
-              title="За какой срок показывать свежие вакансии (для ориентира при ручном поиске)"
-              value={form.period}
-              onChange={(e) => setForm((p) => ({ ...p, period: Number(e.target.value) }))}
-            >
-              {PERIOD_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block space-y-1">
-            <span className="text-sm text-slate-400">Сортировка</span>
-            <select
-              className={field}
-              title="Параметр order_by"
-              value={form.order_by}
-              onChange={(e) => setForm((p) => ({ ...p, order_by: e.target.value }))}
-            >
-              {ORDER_BY_OPTIONS.map((o) => (
-                <option key={o.code} value={o.code}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
-          <label className="block space-y-1 flex-1">
-            <span className="text-sm text-slate-400">Зарплата от</span>
-            <input
-              className={field}
-              placeholder="Не задано"
-              type="number"
-              min={0}
-              value={form.salary === '' || form.salary == null ? '' : form.salary}
-              onChange={(e) =>
-                setForm((p) => ({
-                  ...p,
-                  salary: e.target.value === '' ? '' : Number(e.target.value),
-                }))
-              }
-            />
-          </label>
-          <label className={`inline-flex items-center gap-2 ${checkClass} mb-0 sm:mb-1 shrink-0 h-[42px]`}>
-            <input
-              type="checkbox"
-              checked={!!form.only_with_salary}
-              onChange={(e) => setForm((p) => ({ ...p, only_with_salary: e.target.checked }))}
-              className="accent-indigo-500"
-            />
-            Только с зарплатой
-            <Hint title="Учитывать только вакансии с указанной зарплатой (для единообразия с фильтрами на сайтах)." />
-          </label>
-        </div>
+        </details>
 
         <div className="border-t border-slate-800 pt-4 space-y-3">
           <p className="text-sm text-slate-500">Настройки отклика</p>
@@ -606,14 +722,61 @@ export default function Search() {
           </p>
         </div>
 
-        <button
-          type="button"
-          disabled={saving}
-          onClick={save}
-          className={`bg-indigo-600 text-white ${btnPrimary}`}
-        >
-          {saving ? '…' : 'Сохранить параметры поиска'}
-        </button>
+        <div className="border-t border-slate-800 pt-4 space-y-3">
+          <p className="text-sm text-slate-500">Фильтр релевантности (перед генерацией письма)</p>
+          <div className="text-sm text-slate-300 flex items-center gap-2 flex-wrap">
+            Фильтр нерелевантных вакансий
+            <Hint title="Перед генерацией письма сервер оценивает релевантность вакансии по ключевым словам. Если score ниже порога — вакансия пропускается без расхода токенов Groq (status=skipped, skip_reason=low_score)." />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block space-y-1">
+              <span className="text-sm text-slate-400">Профиль</span>
+              <select
+                className={field}
+                value={relevance.relevance_profile}
+                onChange={(e) => setRelevance((p) => ({ ...p, relevance_profile: e.target.value }))}
+              >
+                <option value="python_backend">Python backend</option>
+                <option value="frontend">Frontend</option>
+                <option value="qa">QA</option>
+                <option value="custom">Custom (только свои ключевые слова)</option>
+              </select>
+            </label>
+            <label className="block space-y-1">
+              <span className="text-sm text-slate-400">Минимальный score</span>
+              <input
+                className={field}
+                type="number"
+                min={0}
+                max={50}
+                value={relevance.relevance_min_score ?? 3}
+                onChange={(e) =>
+                  setRelevance((p) => ({
+                    ...p,
+                    relevance_min_score: e.target.value === '' ? 3 : Number(e.target.value),
+                  }))
+                }
+              />
+            </label>
+          </div>
+          <label className="block space-y-1">
+            <span className="text-sm text-slate-400">Ключевые слова (+) и минус-слова (-)</span>
+            <textarea
+              className={`${field} min-h-24 resize-y`}
+              placeholder={'Например:\nfastapi, celery, kafka, clickhouse\n-php\n-1c'}
+              value={relevance.relevance_skills || ''}
+              onChange={(e) => setRelevance((p) => ({ ...p, relevance_skills: e.target.value }))}
+              title="Можно через запятую или с новой строки. Минус-слова начинайте с '-'."
+            />
+            <div className="text-xs text-slate-500 leading-relaxed">
+              Минус-слова начинайте с <code className="text-slate-400">-</code> (например <code className="text-slate-400">-php</code>) — такие вакансии будут сильнее отсеиваться.
+            </div>
+          </label>
+        </div>
+
+        <div className="text-xs text-slate-500">
+          Подсказка: для полного авто лучше заполнить URL выдачи (прямо из браузера) — тогда расширение будет открывать именно ту выдачу, которую вы настроили.
+        </div>
       </div>
     </div>
   )
