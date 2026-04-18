@@ -15,14 +15,18 @@ async function serpCollectAsync() {
       prev = n
     }
   }
-  const ids = []
+  const items = []
   const seen = new Set()
 
-  function pushIdFromHref(href) {
+  function pushFromHref(href, meta) {
     const m = String(href || '').match(/\/vacancy\/(\d+)/)
     if (m && m[1] && !seen.has(m[1])) {
       seen.add(m[1])
-      ids.push(m[1])
+      items.push({
+        id: m[1],
+        title: meta && meta.title ? String(meta.title).slice(0, 480) : '',
+        company: meta && meta.company ? String(meta.company).slice(0, 480) : '',
+      })
       return true
     }
     return false
@@ -54,12 +58,27 @@ async function serpCollectAsync() {
         card.querySelector('a[data-qa*="serp-item__title"]') ||
         card.querySelector('a[href*="/vacancy/"]')
       if (!a || !a.href) return
-      pushIdFromHref(a.href)
+      // Title
+      const titleText = (a.textContent || '').trim()
+      // Company: try common selectors on hh.ru SERP
+      let companyText = ''
+      try {
+        const c1 =
+          card.querySelector('[data-qa="vacancy-serp__vacancy-employer"]') ||
+          card.querySelector('[data-qa="serp-item__meta-info-company"]') ||
+          card.querySelector('[data-qa="serp-item__company-name"]') ||
+          card.querySelector('[data-qa*="company"] a') ||
+          card.querySelector('a[href*="/employer/"]')
+        companyText = (c1 && c1.textContent ? c1.textContent : '').trim()
+      } catch {
+        companyText = ''
+      }
+      pushFromHref(a.href, { title: titleText, company: companyText })
     })
   }
 
   // Fallback: collect any /vacancy/{id} links from the page (within main content)
-  if (ids.length < 3) {
+  if (items.length < 3) {
     let scope = null
     try {
       scope =
@@ -73,7 +92,8 @@ async function serpCollectAsync() {
     try {
       Array.from(scope.querySelectorAll('a[href*="/vacancy/"]')).forEach((a) => {
         if (!a || !a.href) return
-        pushIdFromHref(a.href)
+        // Fallback: no reliable meta
+        pushFromHref(a.href, null)
       })
     } catch {
       /* */
@@ -81,10 +101,25 @@ async function serpCollectAsync() {
   }
 
   // Safety: cap to avoid accidental huge runs on malformed pages
-  if (ids.length > 120) ids.length = 120
+  if (items.length > 120) items.length = 120
   const nextEl = document.querySelector('[data-qa="pager-next"]')
-  const nextHref = nextEl && nextEl.href ? nextEl.href : null
-  return { ids, nextHref }
+  let nextHref = nextEl && nextEl.href ? nextEl.href : null
+
+  // Fallback: some HH SERP layouts don't expose pager-next reliably.
+  // HH uses 0-based page index: page=0 (or missing) -> 1st page, page=1 -> 2nd, etc.
+  if (!nextHref) {
+    try {
+      const u = new URL(String(location.href || ''))
+      const raw = u.searchParams.get('page')
+      const cur = raw == null || raw === '' ? 0 : parseInt(String(raw), 10)
+      const curPage = Number.isFinite(cur) && cur >= 0 ? cur : 0
+      u.searchParams.set('page', String(curPage + 1))
+      nextHref = u.href
+    } catch {
+      nextHref = null
+    }
+  }
+  return { items, nextHref }
 }
 
 const STATE_KEY = 'hhunter_state'
@@ -598,16 +633,16 @@ async function fullAutoLoop() {
     }
     await chrome.tabs.remove(tab.id).catch(() => {})
 
-    const ids = collected?.ids || []
+    const items = collected?.items || []
     const nextHref = collected?.nextHref || null
     void extActivityLog(
       'INFO',
-      `Выдача собрана: вакансий ${ids.length}, следующая страница: ${nextHref ? 'да' : 'нет'}`,
+      `Выдача собрана: вакансий ${items.length}, следующая страница: ${nextHref ? 'да' : 'нет'}`,
       'extension_bg',
       'full_auto_serp_collected',
     )
 
-    if (ids.length === 0) {
+    if (items.length === 0) {
       void extActivityLog('WARNING', 'На выдаче 0 вакансий (селекторы или пустой запрос)', 'extension_bg', 'full_auto_serp_empty')
       await setState({
         running: false,
@@ -616,17 +651,18 @@ async function fullAutoLoop() {
       return
     }
 
-    for (const vid of ids) {
+    for (const it of items) {
+      const vid = String(it && it.id ? it.id : '').trim()
+      if (!vid) continue
       const st = await getState()
       if (!st.running) return
 
       try {
-        const chk = await apiFetch(
-          apiBase,
-          token,
-          `/extension/vacancy-known?vacancy_id=${encodeURIComponent(vid)}`,
-          { method: 'GET' },
-        )
+        const q = new URLSearchParams()
+        q.set('vacancy_id', vid)
+        if (it && it.title) q.set('title', String(it.title).slice(0, 512))
+        if (it && it.company) q.set('company_name', String(it.company).slice(0, 512))
+        const chk = await apiFetch(apiBase, token, `/extension/vacancy-known?${q.toString()}`, { method: 'GET' })
         if (chk && chk.already_applied) {
           void extActivityLog('INFO', `Пропуск ${vid}: уже в базе`, 'extension_bg', 'full_auto_skip_known')
           continue

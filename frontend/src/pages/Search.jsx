@@ -23,8 +23,14 @@ const SCHEDULE_OPTIONS = [
   { code: 'fullDay', label: 'Полный день' },
   { code: 'shift', label: 'Сменный график' },
   { code: 'flexible', label: 'Гибкий график' },
-  { code: 'remote', label: 'Удалённая работа' },
   { code: 'flyInFlyOut', label: 'Вахтовый метод' },
+]
+
+const WORK_FORMAT_OPTIONS = [
+  { code: 'REMOTE', label: 'Удалённо' },
+  { code: 'ON_SITE', label: 'Офис' },
+  { code: 'HYBRID', label: 'Гибрид' },
+  { code: 'FIELD_WORK', label: 'Разъездной' },
 ]
 
 const PERIOD_OPTIONS = [
@@ -51,6 +57,17 @@ const SEARCH_FIELD_OPTIONS = [
 
 const DEFAULT_SEARCH_FIELDS = ['name', 'description', 'company_name']
 
+/**
+ * Дефолтные плюс-слова по профилю — совпадают с backend/routes_extension.py (_PRESETS).
+ * При смене профиля подставляются в textarea (кроме custom: оставляем то, что уже введено).
+ */
+const RELEVANCE_PROFILE_DEFAULT_SKILLS = {
+  python_backend:
+    'python, fastapi, django, flask, api, rest, postgres, postgresql, redis, celery, docker',
+  frontend: 'react, typescript, javascript, redux, next, vite, webpack, html, css',
+  qa: 'qa, testing, pytest, selenium, playwright, postman, api, rest, jira',
+}
+
 /** Популярные города — быстрый выбор (типичные id регионов для поиска на сайтах вакансий) */
 const TOP_AREAS = [
   { id: '1', name: 'Москва' },
@@ -74,6 +91,7 @@ function defaultForm() {
     experience: '',
     employment: [],
     schedule: [],
+    work_format: [],
     period: 7,
     salary: '',
     only_with_salary: false,
@@ -95,6 +113,7 @@ function normalizeLoadedSearch(s) {
   }
   base.employment = Array.isArray(base.employment) ? base.employment : []
   base.schedule = Array.isArray(base.schedule) ? base.schedule : []
+  base.work_format = Array.isArray(base.work_format) ? base.work_format : []
   base.only_with_salary = !!base.only_with_salary
   base.salary = base.salary != null && base.salary !== '' ? base.salary : ''
   base.order_by = base.order_by || 'publication_time'
@@ -123,6 +142,7 @@ function buildSearchPayload(f) {
     experience: f.experience || null,
     employment: f.employment?.length ? f.employment : [],
     schedule: f.schedule?.length ? f.schedule : [],
+    work_format: f.work_format?.length ? f.work_format : [],
     period: f.period,
     salary: Number.isFinite(salaryNum) ? salaryNum : null,
     only_with_salary: !!f.only_with_salary,
@@ -132,6 +152,69 @@ function buildSearchPayload(f) {
     daily_limit: f.daily_limit,
     hourly_limit: f.hourly_limit,
   }
+}
+
+function normalizeExternalUrl(raw) {
+  const v = String(raw || '').trim()
+  if (!v) return ''
+  if (/^https?:\/\//i.test(v)) return v
+  if (v.startsWith('//')) return `https:${v}`
+  // Пользователи часто вставляют "hh.ru/..." или "tashkent.hh.uz/..." без схемы.
+  return `https://${v}`
+}
+
+function buildHhVacancyUrlFromForm(f) {
+  const text = String(f.search_text || '').trim()
+  const area = String(f.area || '').trim()
+  const experience = String(f.experience || '').trim()
+  const employment = Array.isArray(f.employment) ? f.employment : []
+  const schedule = Array.isArray(f.schedule) ? f.schedule : []
+  const workFormat = Array.isArray(f.work_format) ? f.work_format : []
+  const period = f.period != null && String(f.period).trim() !== '' ? Number(f.period) : null
+  const salary =
+    f.salary === '' || f.salary === null || f.salary === undefined ? null : Number(f.salary)
+  const onlyWithSalary = !!f.only_with_salary
+  const orderBy = String(f.order_by || '').trim()
+  const searchFields = Array.isArray(f.search_fields) ? f.search_fields : []
+
+  if (
+    !text &&
+    !area &&
+    !experience &&
+    employment.length === 0 &&
+    schedule.length === 0 &&
+    workFormat.length === 0 &&
+    !period &&
+    !salary &&
+    !orderBy &&
+    searchFields.length === 0 &&
+    !onlyWithSalary
+  ) {
+    return ''
+  }
+
+  const params = new URLSearchParams()
+  if (text) params.set('text', text)
+  if (area) params.set('area', area)
+  if (experience) params.set('experience', experience)
+  for (const e of employment) {
+    if (e) params.append('employment', e)
+  }
+  for (const s of schedule) {
+    if (s) params.append('schedule', s)
+  }
+  for (const wf of workFormat) {
+    if (wf) params.append('work_format', wf)
+  }
+  // На hh.ru это обычно search_period (в днях).
+  if (Number.isFinite(period) && period > 0) params.set('search_period', String(period))
+  if (Number.isFinite(salary) && salary > 0) params.set('salary', String(Math.trunc(salary)))
+  if (onlyWithSalary) params.set('only_with_salary', 'true')
+  if (orderBy) params.set('order_by', orderBy)
+  for (const sf of searchFields) {
+    if (sf) params.append('search_field', sf)
+  }
+  return `https://hh.ru/search/vacancy?${params.toString()}`
 }
 
 export default function Search() {
@@ -173,6 +256,11 @@ export default function Search() {
       relevance_profile: data.relevance_profile || 'python_backend',
       relevance_min_score: data.relevance_min_score ?? 3,
       relevance_skills: data.relevance_skills || '',
+    }
+    const prof = String(rel.relevance_profile || 'python_backend').trim()
+    if (prof !== 'custom' && !String(rel.relevance_skills || '').trim()) {
+      const preset = RELEVANCE_PROFILE_DEFAULT_SKILLS[prof]
+      if (preset) rel.relevance_skills = preset
     }
     inhibitAutosave.current += 1
     lastSavedSearchJsonRef.current = JSON.stringify(buildSearchPayload(normalized))
@@ -228,7 +316,7 @@ export default function Search() {
       }
     }, 2800)
     return () => clearTimeout(autosaveTimerRef.current)
-  }, [form])
+  }, [form, relevance])
 
   useEffect(() => {
     if (!syncHint || !syncHint.startsWith('Сохранено')) return
@@ -243,27 +331,33 @@ export default function Search() {
   }, [saveToast])
 
   const effectiveSearchUrl = (() => {
-    const direct = String(form.search_url || '').trim()
+    const direct = normalizeExternalUrl(form.search_url)
     if (direct) return direct
-    // Минимальный удобный превью-URL, если пользователь не вставил готовую ссылку.
-    // (Полную сборку URL как в расширении не повторяем, чтобы не расходиться по логике.)
-    const text = String(form.search_text || '').trim()
-    const area = String(form.area || '').trim()
-    if (!text && !area) return ''
-    const params = new URLSearchParams()
-    if (text) params.set('text', text)
-    if (area) params.set('area', area)
-    return `https://hh.ru/search/vacancy?${params.toString()}`
+    return buildHhVacancyUrlFromForm(form)
   })()
 
   async function copySearchUrl() {
     if (!effectiveSearchUrl) return
     try {
-      await navigator.clipboard?.writeText(effectiveSearchUrl)
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(effectiveSearchUrl)
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = effectiveSearchUrl
+        ta.setAttribute('readonly', 'true')
+        ta.style.position = 'fixed'
+        ta.style.left = '-9999px'
+        ta.style.top = '0'
+        document.body.appendChild(ta)
+        ta.focus()
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
       setUrlCopied(true)
       setTimeout(() => setUrlCopied(false), 2000)
     } catch {
-      /* ignore */
+      setSaveToast({ ok: false, msg: 'Не удалось скопировать URL — проверьте права браузера.' })
     }
   }
 
@@ -543,7 +637,7 @@ export default function Search() {
         <details className="rounded-xl border border-slate-800/80 bg-slate-950/30 p-4">
           <summary className="cursor-pointer text-sm text-slate-300 select-none flex items-center justify-between gap-2">
             <span>Дополнительные фильтры</span>
-            <span className="text-xs text-slate-500">опыт, занятость, график, период, сортировка, зарплата</span>
+            <span className="text-xs text-slate-500">опыт, занятость, график, формат, период, сортировка, зарплата</span>
           </summary>
           <div className="pt-4 space-y-5">
             <fieldset className="space-y-2">
@@ -599,6 +693,29 @@ export default function Search() {
                       type="checkbox"
                       checked={form.schedule?.includes(o.code)}
                       onChange={() => toggleInList('schedule', o.code)}
+                      className="accent-indigo-500"
+                    />
+                    {o.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-2">
+              <legend className="text-sm text-slate-400 mb-2 flex items-center gap-2">
+                Формат работы
+                <Hint title="Параметр work_format на hh.ru: REMOTE / ON_SITE / HYBRID / FIELD_WORK. Можно выбрать несколько." />
+              </legend>
+              <div className="flex flex-wrap gap-2">
+                {WORK_FORMAT_OPTIONS.map((o) => (
+                  <label
+                    key={o.code}
+                    className={`${checkClass} ${form.work_format?.includes(o.code) ? 'border-indigo-500/50 ring-1 ring-indigo-500/25' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.work_format?.includes(o.code)}
+                      onChange={() => toggleInList('work_format', o.code)}
                       className="accent-indigo-500"
                     />
                     {o.label}
@@ -734,7 +851,20 @@ export default function Search() {
               <select
                 className={field}
                 value={relevance.relevance_profile}
-                onChange={(e) => setRelevance((p) => ({ ...p, relevance_profile: e.target.value }))}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setRelevance((p) => {
+                    if (v === 'custom') {
+                      return { ...p, relevance_profile: v }
+                    }
+                    const preset = RELEVANCE_PROFILE_DEFAULT_SKILLS[v]
+                    return {
+                      ...p,
+                      relevance_profile: v,
+                      relevance_skills: preset != null ? preset : '',
+                    }
+                  })
+                }}
               >
                 <option value="python_backend">Python backend</option>
                 <option value="frontend">Frontend</option>
@@ -763,13 +893,27 @@ export default function Search() {
             <span className="text-sm text-slate-400">Ключевые слова (+) и минус-слова (-)</span>
             <textarea
               className={`${field} min-h-24 resize-y`}
-              placeholder={'Например:\nfastapi, celery, kafka, clickhouse\n-php\n-1c'}
+              placeholder={
+                relevance.relevance_profile === 'custom'
+                  ? 'Только ваши слова, например:\nfastapi, celery\n-php\n-1c'
+                  : 'Дополните пресет профиля или добавьте минус-слова с новой строки:\n-php\n-1c'
+              }
               value={relevance.relevance_skills || ''}
               onChange={(e) => setRelevance((p) => ({ ...p, relevance_skills: e.target.value }))}
               title="Можно через запятую или с новой строки. Минус-слова начинайте с '-'."
             />
             <div className="text-xs text-slate-500 leading-relaxed">
-              Минус-слова начинайте с <code className="text-slate-400">-</code> (например <code className="text-slate-400">-php</code>) — такие вакансии будут сильнее отсеиваться.
+              {relevance.relevance_profile !== 'custom' ? (
+                <span>
+                  База профиля совпадает с сервером; ниже можно добавить свои плюс-слова и{' '}
+                  <span className="text-slate-400">минус-слова</span>.
+                </span>
+              ) : (
+                <span>
+                  В режиме Custom учитываются только слова из этого поля (пресеты профиля на сервере не подмешиваются).
+                </span>
+              )}{' '}
+              Минус-слова: <code className="text-slate-400">-php</code>, <code className="text-slate-400">-1c</code>.
             </div>
           </label>
         </div>

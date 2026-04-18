@@ -33,6 +33,7 @@ def search_config_dict_from_row(cfg: Any) -> dict[str, Any]:
         "experience": cfg.experience,
         "employment": decode_str_list(cfg.employment),
         "schedule": decode_str_list(cfg.schedule),
+        "work_format": decode_str_list(getattr(cfg, "work_format", None)),
         "period": cfg.period,
         "salary": cfg.salary,
         "only_with_salary": bool(getattr(cfg, "only_with_salary", False)),

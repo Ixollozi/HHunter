@@ -34,9 +34,14 @@ function buildSearchUrl(search, baseOrigin) {
       if (sch) u.append('schedule', String(sch))
     })
   } else if (s.schedule) u.set('schedule', String(s.schedule))
+  if (Array.isArray(s.work_format)) {
+    s.work_format.forEach(function (wf) {
+      if (wf) u.append('work_format', String(wf))
+    })
+  } else if (s.work_format) u.set('work_format', String(s.work_format))
   if (s.period != null && s.period !== '') {
     const p = parseInt(String(s.period), 10)
-    if (!isNaN(p)) u.set('period', String(p))
+    if (!isNaN(p)) u.set('search_period', String(p))
   }
   if (s.salary != null && s.salary !== '') {
     u.set('salary', String(s.salary))

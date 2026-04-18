@@ -27,6 +27,47 @@
     return false
   }
 
+  /** Случайная пауза 5–10 с при появлении капчи (мс). */
+  function captchaPauseMs() {
+    return 5000 + Math.floor(Math.random() * 5001)
+  }
+
+  /**
+   * Пауза 5–10 с при капче; цикл не останавливаем — после паузы сценарий продолжается.
+   * (Если капча осталась, дальше сработают обычные таймауты DOM / save-application.)
+   */
+  async function waitCaptchaPause(apiBase, token, logStep) {
+    const ms = captchaPauseMs()
+    const sec = Math.round(ms / 1000)
+    try {
+      await postExtensionLog(
+        apiBase,
+        token,
+        'WARNING',
+        `Капча: пауза ${sec} с, затем продолжение сценария`,
+        logStep || 'apply_captcha_pause',
+      )
+    } catch { /* */ }
+    try {
+      await sendBg({
+        type: 'report',
+        last: { level: 'INFO', message: `Капча: пауза ${sec} с…` },
+      })
+    } catch { /* */ }
+    await sleep(ms)
+    try {
+      if (detectCaptcha()) {
+        await postExtensionLog(
+          apiBase,
+          token,
+          'INFO',
+          'После паузы капча всё ещё на экране — продолжаем сценарий (без остановки цикла)',
+          `${logStep || 'apply_captcha_pause'}_still`,
+        )
+      }
+    } catch { /* */ }
+  }
+
   function parseVacancyIdFromUrl(url) {
     const m = String(url || '').match(/\/vacancy\/(\d+)/i)
     return m ? m[1] : ''
@@ -1042,8 +1083,7 @@
     }
 
     if (detectCaptcha()) {
-      await sendBg({ type: 'report', kind: 'error', stop_loop: true, last: { level: 'WARNING', message: 'Капча после отклика — цикл остановлен.' } })
-      return { ok: false, error: 'captcha', letterless: true }
+      await waitCaptchaPause(apiBase, token, 'apply_simple_captcha_pause')
     }
 
     const successL = await waitApplySuccess(12000)
@@ -1130,8 +1170,7 @@
     }
 
     if (detectCaptcha()) {
-      await sendBg({ type: 'report', kind: 'error', stop_loop: true, last: { level: 'WARNING', message: 'Капча после отправки — цикл остановлен.' } })
-      return { ok: false, error: 'captcha' }
+      await waitCaptchaPause(apiBase, token, 'apply_form_captcha_pause')
     }
 
     const success = await waitApplySuccess(10000)
@@ -1179,9 +1218,8 @@
     let token = normalizeToken((await chrome.storage.local.get('hhunter_token')).hhunter_token || '')
 
     if (detectCaptcha()) {
-      await postExtensionLog(apiBase, token, 'WARNING', 'Обнаружена капча до старта', 'apply_captcha')
-      await sendBg({ type: 'report', kind: 'error', stop_loop: true, last: { level: 'WARNING', message: 'Капча на hh.ru — цикл остановлен.' } })
-      return { ok: false, error: 'captcha' }
+      await postExtensionLog(apiBase, token, 'WARNING', 'Обнаружена капча до старта сценария', 'apply_captcha')
+      await waitCaptchaPause(apiBase, token, 'apply_captcha_before_start_pause')
     }
     if (pageKind() !== 'vacancy') {
       await postExtensionLog(

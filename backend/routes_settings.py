@@ -100,11 +100,14 @@ def put_settings(payload: SettingsIn, db: Session = Depends(get_db), user=Depend
         data = payload.search.model_dump(exclude_none=True)
         emp = data.pop("employment", None)
         sch = data.pop("schedule", None)
+        wf = data.pop("work_format", None)
         sf = data.pop("search_fields", None)
         if emp is not None:
             cfg.employment = encode_str_list(emp)
         if sch is not None:
             cfg.schedule = encode_str_list(sch)
+        if wf is not None:
+            cfg.work_format = encode_str_list(wf)
         if sf is not None:
             cfg.search_fields = encode_str_list(sf)
         for field, val in data.items():

@@ -46,6 +46,7 @@ class SearchConfigIn(BaseModel):
     experience: str | None = None
     employment: list[str] | None = None
     schedule: list[str] | None = None
+    work_format: list[str] | None = None
     period: int | None = None
     salary: int | None = None
     only_with_salary: bool | None = None

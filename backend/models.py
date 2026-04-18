@@ -67,6 +67,8 @@ class SearchConfig(Base):
     experience: Mapped[str | None] = mapped_column(String(64), nullable=True)
     employment: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-массив кодов
     schedule: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Формат работы: REMOTE / ON_SITE / HYBRID / FIELD_WORK (список в JSON)
+    work_format: Mapped[str | None] = mapped_column(Text, nullable=True)
     period: Mapped[int | None] = mapped_column(Integer, nullable=True)
     salary: Mapped[int | None] = mapped_column(Integer, nullable=True)
     only_with_salary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
