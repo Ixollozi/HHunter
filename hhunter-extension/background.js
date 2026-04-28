@@ -616,7 +616,9 @@ async function fullAutoLoop() {
       continue
     }
     await waitTabComplete(tab.id)
-    await sleep(1300)
+    // Минимизируем лишние паузы: после complete даём только короткий зазор,
+    // дальше serpCollectAsync сам скроллит/ждёт подгрузку.
+    await sleep(150)
 
     let collected
     try {
@@ -715,7 +717,8 @@ async function fullAutoLoop() {
         continue
       }
       await waitTabComplete(vacTab.id)
-      await sleep(550)
+      // Минимальный зазор, чтобы content-script инициализировался после complete.
+      await sleep(120)
       try {
         const r = await tabsSendMessageWithTimeout(vacTab.id, { type: 'hhunter_run_once', autoSubmit: true }, 180000)
         void extActivityLog(
@@ -768,7 +771,8 @@ async function fullAutoLoop() {
           },
         })
       }
-      await sleep(1200)
+      // Без фиксированной паузы: дальнейшая задержка регулируется только delay_min/delay_max пользователя.
+      await sleep(80)
       await chrome.tabs.remove(vacTab.id).catch(() => {})
 
       const delaySettings = await loadSettings().catch(() => ({ settings: { delay_min: 2, delay_max: 4 } }))
@@ -918,6 +922,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           o = DEFAULT_HH_ORIGIN
         }
         await chrome.storage.local.set({ [HH_ORIGIN_KEY]: o })
+        // Синхронизируем с сервером, чтобы веб-UI (страница Поиск) строил выдачу на том же домене.
+        try {
+          const apiBase = await getApiBase()
+          const token = await getToken()
+          if (token) {
+            await apiFetch(apiBase, token, '/extension/set-hh-origin', {
+              method: 'POST',
+              body: JSON.stringify({ hh_origin: o }),
+            })
+          }
+        } catch {
+          /* не блокируем UI */
+        }
         return reply({ ok: true, hh_origin: o })
       }
 

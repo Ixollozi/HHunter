@@ -38,9 +38,10 @@ def get_settings(db: Session = Depends(get_db), user=Depends(get_current_user)) 
         groq_configured=bool((s.groq_api_key_enc or "").strip()),
         cover_letter_mode=(s.cover_letter_mode or "ai"),
         cover_letter_text=s.cover_letter_text,
+        gender=(getattr(s, "gender", None) or "male"),
         relevance_profile=(s.relevance_profile or "python_backend"),
         relevance_skills=(s.relevance_skills or ""),
-        relevance_min_score=int(s.relevance_min_score or 3),
+        relevance_min_score=int(3 if s.relevance_min_score is None else s.relevance_min_score),
         search=search,
     )
 
@@ -73,6 +74,7 @@ def put_settings(payload: SettingsIn, db: Session = Depends(get_db), user=Depend
         "groq_model",
         "cover_letter_mode",
         "cover_letter_text",
+        "gender",
         "relevance_profile",
         "relevance_skills",
         "relevance_min_score",
@@ -177,6 +179,7 @@ def test_keys(db: Session = Depends(get_db), user=Depends(get_current_user)) -> 
                 resume_text=(s.resume_text or "Python разработчик"),
                 api_key=key,
                 model=(s.groq_model or None),
+                gender=(getattr(s, "gender", None) or "male"),
             )
             results["groq"] = {"ok": True, "sample_len": len(txt), "model": (s.groq_model or None)}
         except RuntimeError as e:

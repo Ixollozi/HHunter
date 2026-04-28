@@ -86,6 +86,7 @@ function defaultForm() {
   return {
     search_text: '',
     search_url: '',
+    hh_origin: '',
     search_fields: [...DEFAULT_SEARCH_FIELDS],
     area: '',
     experience: '',
@@ -94,6 +95,7 @@ function defaultForm() {
     work_format: [],
     period: 7,
     salary: '',
+    salary_currency_code: 'RUR',
     only_with_salary: false,
     order_by: 'publication_time',
     delay_min: 2,
@@ -106,6 +108,7 @@ function defaultForm() {
 function normalizeLoadedSearch(s) {
   const base = { ...defaultForm(), ...s }
   base.search_url = base.search_url != null ? String(base.search_url) : ''
+  base.hh_origin = base.hh_origin != null ? String(base.hh_origin) : ''
   if (s.search_fields == null || !Array.isArray(s.search_fields)) {
     base.search_fields = [...DEFAULT_SEARCH_FIELDS]
   } else {
@@ -116,6 +119,7 @@ function normalizeLoadedSearch(s) {
   base.work_format = Array.isArray(base.work_format) ? base.work_format : []
   base.only_with_salary = !!base.only_with_salary
   base.salary = base.salary != null && base.salary !== '' ? base.salary : ''
+  base.salary_currency_code = String(base.salary_currency_code || 'RUR').trim().toUpperCase() || 'RUR'
   base.order_by = base.order_by || 'publication_time'
   base.period = base.period ?? 7
   base.delay_min = base.delay_min ?? 2
@@ -137,6 +141,7 @@ function buildSearchPayload(f) {
   return {
     search_text: f.search_text || null,
     search_url: f.search_url && String(f.search_url).trim() ? String(f.search_url).trim() : null,
+    hh_origin: f.hh_origin && String(f.hh_origin).trim() ? normalizeExternalUrl(String(f.hh_origin).trim()) : null,
     search_fields: Array.isArray(f.search_fields) ? f.search_fields : [],
     area: f.area || null,
     experience: f.experience || null,
@@ -145,6 +150,7 @@ function buildSearchPayload(f) {
     work_format: f.work_format?.length ? f.work_format : [],
     period: f.period,
     salary: Number.isFinite(salaryNum) ? salaryNum : null,
+    salary_currency_code: String(f.salary_currency_code || 'RUR').trim().toUpperCase() || 'RUR',
     only_with_salary: !!f.only_with_salary,
     order_by: f.order_by || null,
     delay_min: f.delay_min,
@@ -173,9 +179,18 @@ function buildHhVacancyUrlFromForm(f) {
   const period = f.period != null && String(f.period).trim() !== '' ? Number(f.period) : null
   const salary =
     f.salary === '' || f.salary === null || f.salary === undefined ? null : Number(f.salary)
+  const salaryCurrency = String(f.salary_currency_code || 'RUR').trim().toUpperCase() || 'RUR'
   const onlyWithSalary = !!f.only_with_salary
   const orderBy = String(f.order_by || '').trim()
   const searchFields = Array.isArray(f.search_fields) ? f.search_fields : []
+  const baseOriginRaw = normalizeExternalUrl(f.hh_origin || 'https://hh.ru')
+  let baseOrigin = 'https://hh.ru'
+  try {
+    const u = new URL(baseOriginRaw)
+    baseOrigin = u.origin
+  } catch {
+    baseOrigin = 'https://hh.ru'
+  }
 
   if (
     !text &&
@@ -208,13 +223,16 @@ function buildHhVacancyUrlFromForm(f) {
   }
   // На hh.ru это обычно search_period (в днях).
   if (Number.isFinite(period) && period > 0) params.set('search_period', String(period))
-  if (Number.isFinite(salary) && salary > 0) params.set('salary', String(Math.trunc(salary)))
+  if (Number.isFinite(salary) && salary > 0) {
+    params.set('salary', String(Math.trunc(salary)))
+    params.set('currency_code', salaryCurrency)
+  }
   if (onlyWithSalary) params.set('only_with_salary', 'true')
   if (orderBy) params.set('order_by', orderBy)
   for (const sf of searchFields) {
     if (sf) params.append('search_field', sf)
   }
-  return `https://hh.ru/search/vacancy?${params.toString()}`
+  return `${baseOrigin}/search/vacancy?${params.toString()}`
 }
 
 export default function Search() {
@@ -773,6 +791,19 @@ export default function Search() {
                     }))
                   }
                 />
+              </label>
+              <label className="block space-y-1 w-[140px]">
+                <span className="text-sm text-slate-400">Валюта</span>
+                <select
+                  className={field}
+                  value={form.salary_currency_code || 'RUR'}
+                  onChange={(e) => setForm((p) => ({ ...p, salary_currency_code: e.target.value }))}
+                  title="Валюта для фильтра salary (currency_code) на hh.ru."
+                >
+                  <option value="RUR">RUB</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                </select>
               </label>
               <label className={`inline-flex items-center gap-2 ${checkClass} mb-0 sm:mb-1 shrink-0 h-[42px]`}>
                 <input

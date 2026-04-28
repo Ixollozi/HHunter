@@ -40,8 +40,13 @@ FORBIDDEN_PHRASES = """
 - «готов обсудить детали в удобное для команды время»
 - Универсальные маркеры без конкретики:
   - "подходит для задач, описанных в вашей вакансии"
+  - "напрямую связано с задачами"
+  - "которые вы описываете в вакансии"
+  - "близко к вашим задачам"
   - "такой же подход подходит"
   - "описанных в вашей вакансии"
+  - "за последние два года"
+  - "последние два года"
 """
 
 FIRST_SENTENCE_EXAMPLES = """
@@ -141,7 +146,13 @@ def letter_style_from_seed(seed: str) -> tuple[float, str]:
     return round(t, 3), block
 
 
-def build_prompt(vacancy: dict[str, Any], resume_text: str, *, style_block: str = "") -> str:
+def build_prompt(
+    vacancy: dict[str, Any],
+    resume_text: str,
+    *,
+    style_block: str = "",
+    gender: str | None = None,
+) -> str:
     description = (vacancy.get("description") or "")[:12000]
     employer = vacancy.get("employer") or {}
     key_skills = vacancy.get("key_skills") or []
@@ -164,6 +175,18 @@ def build_prompt(vacancy: dict[str, Any], resume_text: str, *, style_block: str 
     style_extra = ""
     if (style_block or "").strip():
         style_extra = f"\nСТИЛЬ И ВАРИАЦИЯ (для этой вакансии — соблюдай):\n{style_block.strip()}\n"
+    g = (gender or "").strip().lower()
+    if g not in ("male", "female"):
+        g = "male"
+    gender_ru = "мужчина" if g == "male" else "женщина"
+    gender_rules = (
+        "КРИТИЧНО (грамматика 1-го лица):\n"
+        f"- Пол соискателя: {gender_ru}.\n"
+        "- Используй соответствующие формы 1-го лица по всему письму:\n"
+        "  - мужчина: «я сделал», «ознакомился», «готов», «уверен»\n"
+        "  - женщина: «я сделала», «ознакомилась», «готова», «уверена»\n"
+        "- Не уходи в безличные конструкции только чтобы избежать рода.\n"
+    )
     return f"""
 Ты — живой специалист. Пишешь сопроводительное письмо на русском под ОДНУ конкретную вакансию.
 Письмо должно быть привязано к описанию вакансии (не универсальный текст).
@@ -177,8 +200,12 @@ def build_prompt(vacancy: dict[str, Any], resume_text: str, *, style_block: str 
 МОЁ РЕЗЮМЕ:
 {resume_block}
 {style_extra}
-СУТЬ:
-Найди 1–2 конкретные задачи/требования из описания и свяжи их с фактами из резюме (кейс/результат/цифра/контекст).
+{gender_rules}
+СУТЬ (выполни мысленно, не пиши в письмо):
+Шаг 1 — прочитай описание вакансии и определи: какая главная задача или боль у этой компании? Что стоит первым или повторяется?
+Шаг 2 — найди в резюме кейс где кандидат решал именно это. Не похожее — именно это или максимально близкое.
+Шаг 3 — напиши письмо вокруг одного этого совпадения. Одна проблема → один кейс → что из этого следует для работодателя.
+Если прямого совпадения нет — возьми самый близкий кейс, не натягивай связь искусственно.
 
 КРИТИЧНО (начало письма):
 - Первое предложение НЕ про «N лет опыта» и НЕ список технологий. Только конкретный факт/действие/результат.
@@ -201,9 +228,12 @@ def build_prompt(vacancy: dict[str, Any], resume_text: str, *, style_block: str 
 - Первое предложение — не «лет опыта» и не список технологий?
 - Можно ли отправить это на другую вакансию без правок? Если да — перепиши.
 
-{STYLE_TEMPLATES.strip()}
-
 {FORBIDDEN_PHRASES.strip()}
+
+ТЕСТ ПЕРЕД НАПИСАНИЕМ:
+После прочтения этого письма HR должен подумать: "Этот человек решал именно нашу проблему — хочу с ним поговорить."
+НЕ "хороший кандидат с нужным стеком" и НЕ "интересный опыт, посмотрим" — а именно "он делал то что нам нужно, надо звонить".
+Если письмо вызывает второй или третий вариант — перепиши.
 
 Ответ: выведи только текст письма. Без кавычек, без пояснений, без заголовков.
 """.strip()
@@ -218,8 +248,9 @@ def generate_cover_letter(
     user_id: int | None = None,
     style_block: str = "",
     temperature: float | None = None,
+    gender: str | None = None,
 ) -> str:
-    prompt = build_prompt(vacancy, resume_text, style_block=style_block)
+    prompt = build_prompt(vacancy, resume_text, style_block=style_block, gender=gender)
     temp = 0.2 if temperature is None else max(0.08, min(0.72, float(temperature)))
     last_exc = None
     m = (model or settings.groq_default_model).lower()
@@ -251,7 +282,7 @@ def generate_cover_letter(
                 ),
                 user_prompt=prompt,
                 temperature=temp,
-                max_tokens=300,
+                max_tokens=420,
             )
             break
         except Exception as exc:  # noqa: BLE001
@@ -491,6 +522,7 @@ def get_quality_letter(
     max_retries: int = 1,
     user_id: int | None = None,
     model: str | None = None,
+    gender: str | None = None,
 ) -> str:
     log_letter_generation(
         user_id,
@@ -521,6 +553,7 @@ def get_quality_letter(
             user_id=user_id,
             style_block=style_block,
             temperature=temperature,
+            gender=gender,
         )
         last_raw = raw
         # generate_cover_letter уже возвращает clean_letter(ответ модели)

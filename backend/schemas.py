@@ -37,6 +37,7 @@ class UserPublic(BaseModel):
 
 
 _SEARCH_FIELD_IDS = frozenset({"name", "description", "company_name"})
+_SALARY_CURRENCY_CODES = frozenset({"RUR", "USD", "EUR"})
 
 
 class SearchConfigIn(BaseModel):
@@ -49,9 +50,11 @@ class SearchConfigIn(BaseModel):
     work_format: list[str] | None = None
     period: int | None = None
     salary: int | None = None
+    salary_currency_code: str | None = Field(default=None, max_length=8)
     only_with_salary: bool | None = None
     order_by: str | None = None
     search_url: str | None = Field(default=None, max_length=4096)
+    hh_origin: str | None = Field(default=None, max_length=128)
     delay_min: int | None = None
     delay_max: int | None = None
     daily_limit: int | None = None
@@ -77,6 +80,30 @@ class SearchConfigIn(BaseModel):
             raise ValueError("search_url должен начинаться с http:// или https://")
         return s
 
+    @field_validator("hh_origin")
+    @classmethod
+    def hh_origin_normalize(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        if not s:
+            return None
+        if not re.match(r"^https?://", s, flags=re.IGNORECASE):
+            raise ValueError("hh_origin должен начинаться с http:// или https://")
+        return s.rstrip("/")
+
+    @field_validator("salary_currency_code")
+    @classmethod
+    def salary_currency_allowed(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip().upper()
+        if not s:
+            return None
+        if s not in _SALARY_CURRENCY_CODES:
+            raise ValueError(f"salary_currency_code must be one of: {sorted(_SALARY_CURRENCY_CODES)}")
+        return s
+
 
 class SettingsIn(BaseModel):
     gemini_api_key: str | None = None
@@ -85,10 +112,23 @@ class SettingsIn(BaseModel):
     groq_model: str | None = None
     cover_letter_mode: str | None = None
     cover_letter_text: str | None = None
+    gender: str | None = None
     relevance_profile: str | None = None
     relevance_skills: str | None = None
     relevance_min_score: int | None = None
     search: SearchConfigIn | None = None
+
+    @field_validator("gender")
+    @classmethod
+    def gender_allowed(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip().lower()
+        if not s:
+            return None
+        if s not in {"male", "female"}:
+            raise ValueError("gender must be 'male' or 'female'")
+        return s
 
 
 class SettingsOut(BaseModel):
@@ -98,6 +138,7 @@ class SettingsOut(BaseModel):
     groq_configured: bool | None = None
     cover_letter_mode: str | None = None
     cover_letter_text: str | None = None
+    gender: str | None = None
     relevance_profile: str | None = None
     relevance_skills: str | None = None
     relevance_min_score: int | None = None
@@ -127,6 +168,7 @@ class ExtensionSettingsOut(BaseModel):
     groq_model: str | None = None
     groq_configured: bool | None = None
     groq_requests_remaining: int | None = None
+    cover_letter_mode: str | None = None
 
 
 class ExtensionGenerateLetterIn(BaseModel):

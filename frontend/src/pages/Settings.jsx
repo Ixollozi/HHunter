@@ -9,6 +9,7 @@ export default function Settings() {
     groq_model: 'qwen/qwen3-32b',
     cover_letter_mode: 'ai',
     cover_letter_text: '',
+    gender: 'male',
   })
   const [groqKeyInput, setGroqKeyInput] = useState('')
   const [groqConfigured, setGroqConfigured] = useState(false)
@@ -40,6 +41,7 @@ export default function Settings() {
       groq_model: data.groq_model || 'qwen/qwen3-32b',
       cover_letter_mode: data.cover_letter_mode || 'ai',
       cover_letter_text: data.cover_letter_text || '',
+      gender: data.gender || 'male',
     }
     setGroqConfigured(!!data.groq_configured)
     setHealth(h)
@@ -219,6 +221,19 @@ export default function Settings() {
             Письмо для отклика
             <Hint title="Можно использовать генерацию (AI) или своё письмо/шаблон. Если выбрать «своё», расширение будет брать текст отсюда и не будет требовать ключ/резюме для генерации." />
           </div>
+          <div className="text-sm text-slate-300 flex items-center gap-1 flex-wrap pt-2">
+            Пол
+            <Hint title="Используется для корректных грамматических форм в сгенерированном письме (я сделал/сделала и т.п.)." />
+          </div>
+          <select
+            className={field}
+            title="Пол соискателя (для генерации письма)."
+            value={form.gender || 'male'}
+            onChange={(e) => setForm((p) => ({ ...p, gender: e.target.value }))}
+          >
+            <option value="male">Мужчина</option>
+            <option value="female">Женщина</option>
+          </select>
           <select
             className={field}
             title="Источник письма для рассылки/откликов"
@@ -227,6 +242,7 @@ export default function Settings() {
           >
             <option value="ai">Генерировать (AI)</option>
             <option value="custom">Использовать своё письмо</option>
+            <option value="none">Без письма (отклик без текста)</option>
           </select>
           <textarea
             className={`${field} min-h-40 resize-y ${form.cover_letter_mode === 'custom' ? '' : 'opacity-60'}`}

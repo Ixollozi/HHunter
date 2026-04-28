@@ -155,7 +155,7 @@ def _relevance_settings_from_user(st: UserSettings | None) -> tuple[set[str], in
     min_score = 3
     try:
         if st and getattr(st, "relevance_min_score", None) is not None:
-            min_score = int(getattr(st, "relevance_min_score") or 3)
+            min_score = int(getattr(st, "relevance_min_score"))
     except Exception:
         min_score = 3
     min_score = max(0, min(min_score, 50))
@@ -225,6 +225,39 @@ def _latest_search_config(db: Session, user_id: int) -> SearchConfig | None:
     return db.scalar(select(SearchConfig).where(SearchConfig.user_id == user_id).order_by(desc(SearchConfig.created_at)))
 
 
+@router.post("/set-hh-origin")
+def extension_set_hh_origin(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    raw = str((body or {}).get("hh_origin") or "").strip().rstrip("/")
+    if not raw:
+        raise HTTPException(status_code=400, detail="hh_origin обязателен")
+    if not re.match(r"^https?://", raw, flags=re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="hh_origin должен начинаться с http:// или https://")
+    try:
+        from urllib.parse import urlparse
+
+        u = urlparse(raw)
+        if (u.scheme or "").lower() != "https":
+            raise ValueError("https only")
+        host = (u.hostname or "").lower()
+        if not (host == "hh.ru" or host.endswith(".hh.ru") or host == "hh.uz" or host.endswith(".hh.uz") or host == "hh.kz" or host.endswith(".hh.kz")):
+            raise ValueError("not hh host")
+        origin = f"{u.scheme}://{host}"
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Некорректный hh_origin: {e!s}"[:220]) from e
+
+    cfg = _latest_search_config(db, user.id)
+    if not cfg:
+        raise HTTPException(status_code=400, detail="Нет сохранённых параметров поиска — сначала сохраните поиск на сайте.")
+    cfg.hh_origin = origin
+    db.add(cfg)
+    db.commit()
+    return {"ok": True, "hh_origin": origin}
+
+
 def _utc_day_start() -> dt.datetime:
     now = dt.datetime.now(dt.UTC)
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -245,6 +278,7 @@ def extension_settings(db: Session = Depends(get_db), user: User = Depends(get_c
     st = db.get(UserSettings, user.id)
     groq_model = (st.groq_model if st else None) or None
     groq_configured = bool(st and (st.groq_api_key_enc or "").strip())
+    cover_letter_mode = (getattr(st, "cover_letter_mode", None) or "ai").strip().lower() if st else "ai"
     sent_today = db.scalar(
         select(func.count(Application.id)).where(
             Application.user_id == user.id,
@@ -273,6 +307,7 @@ def extension_settings(db: Session = Depends(get_db), user: User = Depends(get_c
         groq_model=groq_model,
         groq_configured=groq_configured,
         groq_requests_remaining=None,
+        cover_letter_mode=cover_letter_mode,
     )
 
 
@@ -350,6 +385,9 @@ def extension_generate_letter(
 
     # ── Пользовательское письмо (без AI) ──────────────────────────────────
     mode = (getattr(st, "cover_letter_mode", None) or "ai").strip().lower()
+    if mode == "none":
+        # Явный режим «без письма»: расширение отправит отклик без текста.
+        return ExtensionGenerateLetterOut(letter="", model_used=None, requests_remaining=None)
     if mode == "custom":
         tpl = (getattr(st, "cover_letter_text", None) or "").strip()
         if not tpl:
@@ -413,6 +451,7 @@ def extension_generate_letter(
         )
     try:
         api_key = decrypt_secret(st.groq_api_key_enc or "")
+        gender = (getattr(st, "gender", None) or "male").strip().lower()
         letter = get_quality_letter(
             vacancy,
             st.resume_text or "",
@@ -420,6 +459,7 @@ def extension_generate_letter(
             max_retries=2,
             user_id=user.id,
             model=(st.groq_model or None),
+            gender=gender,
         )
     except RuntimeError as e:
         # Конфигурация шифрования/ключа. Это не 502.

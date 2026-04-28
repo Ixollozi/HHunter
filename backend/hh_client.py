@@ -124,7 +124,8 @@ def build_hh_web_search_url(cfg_dict: dict[str, Any], *, origin: str = "https://
         try:
             q.append(("salary", str(int(sal))))
             # На вебе hh обычно использует currency_code
-            q.append(("currency_code", "RUR"))
+            cur = str(cfg_dict.get("salary_currency_code") or "RUR").strip().upper() or "RUR"
+            q.append(("currency_code", cur))
         except (TypeError, ValueError):
             pass
 
@@ -327,7 +328,8 @@ def search_params_from_saved_search(cfg_dict: dict[str, Any]) -> list[tuple[str,
     if sal is not None and str(sal).strip():
         try:
             q.append(("salary", str(int(sal))))
-            q.append(("currency", "RUR"))
+            cur = str(cfg_dict.get("salary_currency_code") or "RUR").strip().upper() or "RUR"
+            q.append(("currency", cur))
         except (TypeError, ValueError):
             pass
 

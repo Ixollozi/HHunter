@@ -1116,12 +1116,106 @@
     return { ok: true, submitted: false, error: 'submit_not_confirmed', letterless: true }
   }
 
+  // ─── Variant: form exists, but we intentionally don't use cover letter ────
+  async function handleNoLetterForm(apiBase, token, savePayload, autoSubmit) {
+    await postExtensionLog(apiBase, token, 'INFO', 'Режим без письма: отправка формы без сопроводительного', 'apply_none_form_start')
+
+    if (!autoSubmit) {
+      let sa = null
+      try {
+        sa = await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'sent' })
+      } catch { sa = null }
+      if (sa && sa.status === 409) {
+        await sendBg({ type: 'report', kind: 'skipped', last: { level: 'INFO', message: `Уже в базе: ${savePayload.vacancy_title}` } })
+        return { ok: true, submitted: false, error: 'duplicate', no_letter: true }
+      }
+      await sendBg({
+        type: 'report',
+        kind: 'sent',
+        last: { level: 'INFO', message: `Черновик (без письма): ${savePayload.vacancy_title} — нажмите отправить на hh` },
+      })
+      return { ok: true, submitted: false, no_letter: true }
+    }
+
+    const subBtn = await waitUntil(() => {
+      const s = findSubmitButton()
+      return s && isSubmitLikeClickable(s) ? s : null
+    }, 6500, 160)
+
+    if (!subBtn) {
+      await postExtensionLog(apiBase, token, 'WARNING', 'Режим без письма: кнопка отправки не найдена', 'apply_none_form_submit_missing')
+      try {
+        await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'error', error_message: 'none_form_submit_missing' })
+      } catch { /* */ }
+      await sendBg({ type: 'report', kind: 'error', last: { level: 'WARNING', message: 'Не найдена кнопка отправки (без письма).' } })
+      return { ok: true, submitted: false, error: 'none_form_submit_missing', no_letter: true }
+    }
+
+    await postExtensionLog(apiBase, token, 'INFO', 'Клик по отправке (форма без письма)', 'apply_none_form_submit_click')
+    subBtn.click()
+    // Минимальная пауза после клика — дальше ждём подтверждение (но в быстрым таймаутом для none-режима).
+    await sleep(160)
+
+    for (let j = 0; j < 20; j += 1) {
+      if (tryDismissCountryMismatchModal()) {
+        await postExtensionLog(apiBase, token, 'INFO', 'После отправки: закрыто предупреждение о стране', 'apply_none_country_modal_after_submit')
+        await sleep(220)
+      } else break
+    }
+
+    if (detectCaptcha()) {
+      await waitCaptchaPause(apiBase, token, 'apply_none_form_captcha_pause')
+    }
+
+    // В none-режиме ждём подтверждение меньше, чтобы не тормозить цикл на медленном DOM.
+    const success = await waitApplySuccess(3000)
+    if (!success) {
+      await postExtensionLog(
+        apiBase,
+        token,
+        'WARNING',
+        'Без письма: быстрый таймаут подтверждения (DOM). Переходим дальше, не блокируя цикл.',
+        'apply_none_form_fast_timeout',
+      )
+      // Не пишем status=error: часто hh просто не успевает отрисовать success-блок, но отклик уже отправлен.
+      try {
+        await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'sent' })
+      } catch { /* */ }
+      await sendBg({
+        type: 'report',
+        kind: 'sent',
+        last: { level: 'INFO', message: `Отправлено (без письма, без подтверждения DOM): ${savePayload.vacancy_title}` },
+      })
+      return { ok: true, submitted: true, no_letter: true, unconfirmed: true }
+    }
+
+    try {
+      const sa = await extensionApi('/extension/save-application', 'POST', { ...savePayload, status: 'sent' })
+      if (sa && sa.status === 409) {
+        await sendBg({ type: 'report', kind: 'skipped', last: { level: 'INFO', message: `Уже в базе: ${savePayload.vacancy_title}` } })
+        return { ok: true, submitted: true, error: 'duplicate', no_letter: true }
+      }
+      if (sa && sa.status === 429) {
+        await sendBg({ type: 'report', kind: 'error', stop_loop: true, last: { level: 'WARNING', message: 'Лимит откликов (UTC) — цикл остановлен.' } })
+        return { ok: true, submitted: true, error: 'server_limit', no_letter: true }
+      }
+    } catch { /* */ }
+    await postExtensionLog(apiBase, token, 'SUCCESS', `Без письма: отклик подтверждён: ${savePayload.vacancy_title.slice(0, 80)}`, 'apply_none_form_ok')
+    await sendBg({ type: 'report', kind: 'sent', last: { level: 'SUCCESS', message: `Готово (без письма): ${savePayload.vacancy_title}` } })
+    return { ok: true, submitted: true, no_letter: true }
+  }
+
   // ─── Variant 1 & 2: form textarea / chat with letter ─────────────────────
 
   async function handleFormWithLetter(ta, letter, apiBase, token, savePayload, autoSubmit) {
-    ta.focus()
-    setNativeValue(ta, letter)
-    await postExtensionLog(apiBase, token, 'INFO', 'Текст письма вставлен в форму (вариант 1)', 'apply_form_letter_set')
+    const hasLetter = !!String(letter || '').trim()
+    if (hasLetter) {
+      ta.focus()
+      setNativeValue(ta, letter)
+      await postExtensionLog(apiBase, token, 'INFO', 'Текст письма вставлен в форму (вариант 1)', 'apply_form_letter_set')
+    } else {
+      await postExtensionLog(apiBase, token, 'INFO', 'Режим без письма: отправка формы без текста', 'apply_form_letter_skip_none')
+    }
 
     if (!autoSubmit) {
       await postExtensionLog(apiBase, token, 'INFO', 'Полуавто: запись черновика из формы (save-application)', 'apply_semi_form_save')
@@ -1158,7 +1252,13 @@
       return { ok: true, submitted: false, error: 'submit_button_missing' }
     }
 
-    await postExtensionLog(apiBase, token, 'INFO', 'Клик по отправке (форма с письмом)', 'apply_form_submit_click')
+    await postExtensionLog(
+      apiBase,
+      token,
+      'INFO',
+      hasLetter ? 'Клик по отправке (форма с письмом)' : 'Клик по отправке (форма без письма)',
+      hasLetter ? 'apply_form_submit_click' : 'apply_form_submit_click_no_letter',
+    )
     sub.click()
     await sleep(260)
 
@@ -1261,77 +1361,99 @@
       'apply_start',
     )
 
-    const contactInfo = await tryCollectVacancyContact(10000, apiBase, token)
-    payload.contact_phone = contactInfo.contact_phone || ''
-    payload.contact_name = contactInfo.contact_name || ''
-    if (payload.contact_phone) {
-      await postExtensionLog(apiBase, token, 'INFO', `Телефон из «Связаться»: ${payload.contact_phone.slice(0, 40)}`, 'apply_contact_ok')
-    } else if (contactInfo.reason_code) {
-      await postExtensionLog(apiBase, token, 'INFO', `Контакты: ${contactInfo.reason_code}`, `apply_contact_${contactInfo.reason_code}`)
+    // ── Режим письма (чтобы в режиме none не дергать генерацию вообще) ────
+    let coverMode = 'ai'
+    try {
+      // Важно: принудительно обновляем настройки, иначе из-за TTL фона режим может залипнуть на старом значении.
+      const st = await sendBg({ type: 'get_state', refresh_settings: true })
+      coverMode = String(st?.ext?.cover_letter_mode || 'ai').trim().toLowerCase() || 'ai'
+    } catch { /* */ }
+    const noLetterMode = coverMode === 'none'
+
+    // ── Контакты (в none-режиме пропускаем/сильно ускоряем) ───────────────
+    if (!noLetterMode) {
+      const contactInfo = await tryCollectVacancyContact(10000, apiBase, token)
+      payload.contact_phone = contactInfo.contact_phone || ''
+      payload.contact_name = contactInfo.contact_name || ''
+      if (payload.contact_phone) {
+        await postExtensionLog(apiBase, token, 'INFO', `Телефон из «Связаться»: ${payload.contact_phone.slice(0, 40)}`, 'apply_contact_ok')
+      } else if (contactInfo.reason_code) {
+        await postExtensionLog(apiBase, token, 'INFO', `Контакты: ${contactInfo.reason_code}`, `apply_contact_${contactInfo.reason_code}`)
+      }
+    } else {
+      payload.contact_phone = ''
+      payload.contact_name = ''
+      await postExtensionLog(apiBase, token, 'INFO', 'Режим без письма: сбор контактов пропущен (ускорение)', 'apply_contact_skipped_none')
     }
 
     // ── Генерация письма ─────────────────────────────────────────────────
-    let res
-    try {
-      res = await extensionApi('/extension/generate-letter', 'POST', {
-        vacancy_title: payload.vacancy_title,
-        vacancy_description: payload.vacancy_description,
-        company_name: payload.company_name,
-        vacancy_requirements: payload.vacancy_requirements || '',
-        key_skills: payload.key_skills || '',
-        salary_info: payload.salary_info || '',
-      })
-    } catch (e) {
-      const detail = String((e && e.message) || e) || 'Failed to fetch'
-      const ru = ruGenerateLetterLogDetail(detail)
-      await postExtensionLog(apiBase, token, 'ERROR', `Генерация письма: ${ru}`, 'apply_generate_fail')
-      await sendBg({ type: 'report', kind: 'error', stop_loop: false, last: { level: 'ERROR', message: `Генерация письма: ${ru}` } })
-      return { ok: false, error: detail }
-    }
-
-    const data = res.data && typeof res.data === 'object' ? res.data : {}
-    if (!res.ok) {
-      // Нерелевантная вакансия — мягкий пропуск без расхода токенов и без ошибки
-      if (res.status === 422 && data && data.detail && data.detail.code === 'low_score') {
-        const sc = data.detail.score
-        await postExtensionLog(
-          apiBase,
-          token,
-          'INFO',
-          `Пропуск: вакансия нерелевантна (score=${sc}, min=3)`,
-          'apply_low_score_skip',
-        )
-        try {
-          await extensionApi('/extension/save-application', 'POST', {
-            vacancy_id: payload.vacancy_id || payload.vacancy_url,
-            vacancy_title: payload.vacancy_title,
-            vacancy_url: payload.vacancy_url,
-            company_name: payload.company_name || null,
-            status: 'skipped',
-            skip_reason: 'low_score',
-            error_message: null,
-          })
-        } catch { /* */ }
-        await sendBg({ type: 'report', kind: 'skipped', last: { level: 'INFO', message: `Пропущено (нерелевантно): ${payload.vacancy_title}` } })
-        return { ok: true, submitted: false, error: 'low_score', skipped: true }
+    let letter = ''
+    let modelUsed = null
+    if (!noLetterMode) {
+      let res
+      try {
+        res = await extensionApi('/extension/generate-letter', 'POST', {
+          vacancy_title: payload.vacancy_title,
+          vacancy_description: payload.vacancy_description,
+          company_name: payload.company_name,
+          vacancy_requirements: payload.vacancy_requirements || '',
+          key_skills: payload.key_skills || '',
+          salary_info: payload.salary_info || '',
+        })
+      } catch (e) {
+        const detail = String((e && e.message) || e) || 'Failed to fetch'
+        const ru = ruGenerateLetterLogDetail(detail)
+        await postExtensionLog(apiBase, token, 'ERROR', `Генерация письма: ${ru}`, 'apply_generate_fail')
+        await sendBg({ type: 'report', kind: 'error', stop_loop: false, last: { level: 'ERROR', message: `Генерация письма: ${ru}` } })
+        return { ok: false, error: detail }
       }
-      const detail = data?.detail || `HTTP ${res.status}`
-      let extra = ''
-      if (res.status === 429) extra = ' (лимит откликов на сервере)'
-      const ru = ruGenerateLetterLogDetail(detail)
-      await postExtensionLog(apiBase, token, 'ERROR', `Генерация письма: ${ru}${extra}`, 'apply_generate_fail')
-      await sendBg({
-        type: 'report',
-        kind: 'error',
-        stop_loop: res.status === 429,
-        last: { level: 'ERROR', message: `Генерация письма: ${ru}${extra}` },
-      })
-      return { ok: false, error: String(detail) }
-    }
 
-    await postExtensionLog(apiBase, token, 'INFO', `Письмо сгенерировано, длина ${(data.letter || '').length}`, 'apply_generate_ok')
-    const letter = (data.letter || '').trim()
-    const modelUsed = data.model_used || null
+      const data = res.data && typeof res.data === 'object' ? res.data : {}
+      if (!res.ok) {
+        // Нерелевантная вакансия — мягкий пропуск без расхода токенов и без ошибки
+        if (res.status === 422 && data && data.detail && data.detail.code === 'low_score') {
+          const sc = data.detail.score
+          await postExtensionLog(
+            apiBase,
+            token,
+            'INFO',
+            `Пропуск: вакансия нерелевантна (score=${sc}, min=3)`,
+            'apply_low_score_skip',
+          )
+          try {
+            await extensionApi('/extension/save-application', 'POST', {
+              vacancy_id: payload.vacancy_id || payload.vacancy_url,
+              vacancy_title: payload.vacancy_title,
+              vacancy_url: payload.vacancy_url,
+              company_name: payload.company_name || null,
+              status: 'skipped',
+              skip_reason: 'low_score',
+              error_message: null,
+            })
+          } catch { /* */ }
+          await sendBg({ type: 'report', kind: 'skipped', last: { level: 'INFO', message: `Пропущено (нерелевантно): ${payload.vacancy_title}` } })
+          return { ok: true, submitted: false, error: 'low_score', skipped: true }
+        }
+        const detail = data?.detail || `HTTP ${res.status}`
+        let extra = ''
+        if (res.status === 429) extra = ' (лимит откликов на сервере)'
+        const ru = ruGenerateLetterLogDetail(detail)
+        await postExtensionLog(apiBase, token, 'ERROR', `Генерация письма: ${ru}${extra}`, 'apply_generate_fail')
+        await sendBg({
+          type: 'report',
+          kind: 'error',
+          stop_loop: res.status === 429,
+          last: { level: 'ERROR', message: `Генерация письма: ${ru}${extra}` },
+        })
+        return { ok: false, error: String(detail) }
+      }
+
+      await postExtensionLog(apiBase, token, 'INFO', `Письмо сгенерировано, длина ${(data.letter || '').length}`, 'apply_generate_ok')
+      letter = (data.letter || '').trim()
+      modelUsed = data.model_used || null
+    } else {
+      await postExtensionLog(apiBase, token, 'INFO', 'Режим без письма: генерация пропущена (без запроса к LLM)', 'apply_generate_skipped_none')
+    }
 
     const savePayload = {
       vacancy_id: payload.vacancy_id || payload.vacancy_url,
@@ -1369,7 +1491,7 @@
       } else {
         await postExtensionLog(apiBase, token, 'WARNING', 'Кнопка открытия формы не найдена', 'apply_open_form_missing')
       }
-      ui = await waitForApplyUiState(22000, 170)
+      ui = await waitForApplyUiState(noLetterMode ? 6500 : 22000, 170)
     }
 
     await postExtensionLog(apiBase, token, 'INFO', `Состояние интерфейса (режим): ${ui}`, 'apply_ui_state')
@@ -1379,6 +1501,22 @@
     // ════════════════════════════════════════════════════════════════════
     if (ui === 'chat') {
       await postExtensionLog(apiBase, token, 'INFO', 'Вариант 2: чат-поле видно сразу', 'apply_variant2')
+      if (noLetterMode) {
+        await postExtensionLog(apiBase, token, 'WARNING', 'Режим без письма: чат требует сообщение — пропуск вакансии', 'apply_none_chat_skip')
+        try {
+          await extensionApi('/extension/save-application', 'POST', {
+            vacancy_id: payload.vacancy_id || payload.vacancy_url,
+            vacancy_title: payload.vacancy_title,
+            vacancy_url: payload.vacancy_url,
+            company_name: payload.company_name || null,
+            status: 'skipped',
+            skip_reason: 'no_letter_chat',
+            error_message: null,
+          })
+        } catch { /* */ }
+        await sendBg({ type: 'report', kind: 'skipped', last: { level: 'INFO', message: `Пропущено (без письма нельзя в чат): ${payload.vacancy_title}` } })
+        return { ok: true, submitted: false, error: 'no_letter_chat', skipped: true, via_chat: true }
+      }
       if (!autoSubmit) {
         const r = await pasteChatComposerSemiOnly(letter, apiBase, token, savePayload, 24000)
         if (r) return r
@@ -1430,6 +1568,12 @@
     // ════════════════════════════════════════════════════════════════════
     if (ui === 'simple') {
       return handleSimpleApply(apiBase, token, savePayload, autoSubmit)
+    }
+
+    // Режим без письма: НЕ трогаем toggle письма и НЕ ждём textarea.
+    // Если форма отклика открыта (или должна быть открыта после openBtn) — жмём submit напрямую.
+    if (noLetterMode) {
+      return handleNoLetterForm(apiBase, token, savePayload, autoSubmit)
     }
 
     // ════════════════════════════════════════════════════════════════════

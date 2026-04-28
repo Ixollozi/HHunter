@@ -45,7 +45,8 @@ function buildSearchUrl(search, baseOrigin) {
   }
   if (s.salary != null && s.salary !== '') {
     u.set('salary', String(s.salary))
-    u.set('currency', 'RUR')
+    const cur = String(s.salary_currency_code || 'RUR').trim().toUpperCase() || 'RUR'
+    u.set('currency_code', cur)
   }
   if (s.only_with_salary) u.set('only_with_salary', 'true')
   if (s.order_by != null && String(s.order_by).trim()) u.set('order_by', String(s.order_by).trim())

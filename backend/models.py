@@ -51,6 +51,9 @@ class UserSettings(Base):
     relevance_min_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     """Минимальный score для пропуска/отклика (если None — используется дефолт)."""
 
+    gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """Пол соискателя для корректных форм в письме: male/female."""
+
     user: Mapped[User] = relationship(back_populates="settings")
 
 
@@ -71,10 +74,12 @@ class SearchConfig(Base):
     work_format: Mapped[str | None] = mapped_column(Text, nullable=True)
     period: Mapped[int | None] = mapped_column(Integer, nullable=True)
     salary: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_currency_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
     only_with_salary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     order_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Если задано — приоритетный URL выдачи (например tashkent.hh.uz/search/vacancy?...).
     search_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hh_origin: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     delay_min: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     delay_max: Mapped[int] = mapped_column(Integer, default=4, nullable=False)

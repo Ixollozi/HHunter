@@ -165,6 +165,7 @@ def build_letter_demo_payload_web(db: Session, user_id: int, s: UserSettings, *,
             max_retries=2,
             user_id=user_id,
             model=(s.groq_model or None),
+            gender=(getattr(s, "gender", None) or "male"),
         )
     vok, vmsg = validate_letter(letter, vacancy_description=str(vacancy.get("description") or ""))
 
@@ -226,6 +227,7 @@ def build_letter_demo_payload_api(db: Session, user_id: int, s: UserSettings, *,
             max_retries=2,
             user_id=user_id,
             model=(s.groq_model or None),
+            gender=(getattr(s, "gender", None) or "male"),
         )
     vok, vmsg = validate_letter(letter, vacancy_description=str(vacancy.get("description") or ""))
 
